@@ -17,7 +17,7 @@ object CoreConfigGenerator {
         val authPassword = urlDecode(userPass.removeSuffix(":"))
         val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
 
-        val sni = params["sni"]?.ifBlank { null } ?: config.host
+        val sni = params["sni"]?.ifBlank { null } ?: params["peer"]?.ifBlank { null } ?: config.host
         val insecure = params["insecure"] == "1" || params["insecure"] == "true" || params["allowInsecure"] == "1"
         val obfsType = params["obfs"] ?: ""
         val obfsPassword = params["obfs-password"] ?: ""
@@ -50,10 +50,7 @@ object CoreConfigGenerator {
 
     fun buildXrayJson(config: VpnConfig, resolvedHostIp: String): String {
         val root = JSONObject()
-        root.put("log", JSONObject().apply { put("loglevel", "warning") })
-        root.put("dns", JSONObject().apply {
-            put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
-        })
+        root.put("log", JSONObject().apply { put("loglevel", "error") })
 
         val inbounds = JSONArray()
         inbounds.put(JSONObject().apply {
@@ -64,7 +61,6 @@ object CoreConfigGenerator {
             put("sniffing", JSONObject().apply {
                 put("enabled", true)
                 put("destOverride", JSONArray().put("http").put("tls"))
-                put("routeOnly", true)
             })
             put("settings", JSONObject().apply {
                 put("auth", "noauth")
@@ -79,7 +75,6 @@ object CoreConfigGenerator {
             put("sniffing", JSONObject().apply {
                 put("enabled", true)
                 put("destOverride", JSONArray().put("http").put("tls"))
-                put("routeOnly", true)
             })
         })
         root.put("inbounds", inbounds)
@@ -98,7 +93,7 @@ object CoreConfigGenerator {
         val raw = config.rawConfig.trim()
         return when {
             raw.startsWith("vless://", ignoreCase = true) -> parseVlessOutbound(raw, config.host, config.port, resolvedHostIp)
-            raw.startsWith("ss://", ignoreCase = true) -> parseShadowsocksOutbound(raw, resolvedHostIp)
+            raw.startsWith("ss://", ignoreCase = true) -> parseShadowsocksOutbound(raw, resolvedHostIp, config.port)
             raw.startsWith("vmess://", ignoreCase = true) -> parseVmessOutbound(raw, resolvedHostIp)
             raw.startsWith("trojan://", ignoreCase = true) -> parseTrojanOutbound(raw, config.host, config.port, resolvedHostIp)
             else -> throw Exception("پروتکل ${config.protocol} پشتیبانی نمی‌شود")
@@ -116,7 +111,7 @@ object CoreConfigGenerator {
         val userObj = JSONObject().apply {
             put("id", uuid)
             put("encryption", encryption)
-            if (flow.isNotBlank() && (net == "tcp" || net == "raw" || net == "xhttp")) {
+            if (flow.isNotBlank() && (net == "tcp" || net == "raw")) {
                 put("flow", flow)
             }
         }
@@ -150,43 +145,66 @@ object CoreConfigGenerator {
         }
     }
 
-    private fun parseShadowsocksOutbound(raw: String, resolvedHostIp: String): JSONObject {
-        val withoutScheme = raw.substringAfter("://").substringBefore("#").substringBefore("?")
-        val method: String
-        val password: String
-        val port: Int
+    private fun parseShadowsocksOutbound(raw: String, resolvedHostIp: String, fallbackPort: Int): JSONObject {
+        val withoutScheme = raw.substringAfter("://").substringBefore("#")
+        val mainPart = withoutScheme.substringBefore("?")
+        val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
 
-        if (withoutScheme.contains("@")) {
-            val rawUser = urlDecode(withoutScheme.substringBeforeLast("@").trim())
-            val hostPort = withoutScheme.substringAfterLast("@").substringBefore("/")
-            port = hostPort.substringAfterLast(":", "443").toIntOrNull() ?: 443
-            val decodedUser = if (rawUser.contains(":")) rawUser else decodeBase64Safe(rawUser)
-            method = decodedUser.substringBefore(":").trim()
-            password = decodedUser.substringAfter(":").trim()
+        var method = ""
+        var password = ""
+        var port = fallbackPort
+
+        if (mainPart.contains("@")) {
+            val userInfoRaw = urlDecode(mainPart.substringBeforeLast("@").trim())
+            val hostPort = mainPart.substringAfterLast("@").substringBefore("/")
+            port = hostPort.substringAfterLast(":", "$fallbackPort").toIntOrNull() ?: fallbackPort
+
+            if (userInfoRaw.contains(":") && !isLikelyBase64(userInfoRaw)) {
+                method = userInfoRaw.substringBefore(":").trim()
+                password = userInfoRaw.substringAfter(":").trim()
+            } else {
+                val decodedUser = decodeBase64Safe(userInfoRaw)
+                method = decodedUser.substringBefore(":").trim()
+                password = decodedUser.substringAfter(":").trim()
+            }
         } else {
-            val decodedAll = decodeBase64Safe(urlDecode(withoutScheme.substringBefore("/").trim()))
+            val decodedAll = decodeBase64Safe(urlDecode(mainPart.substringBefore("/").trim()))
             val userPart = decodedAll.substringBeforeLast("@")
             val hostPort = decodedAll.substringAfterLast("@")
             method = userPart.substringBefore(":").trim()
             password = userPart.substringAfter(":").trim()
-            port = hostPort.substringAfterLast(":", "443").toIntOrNull() ?: 443
+            port = hostPort.substringAfterLast(":", "$fallbackPort").toIntOrNull() ?: fallbackPort
+        }
+
+        // استانداردسازی نام متدهای Shadowsocks برای هسته Xray
+        val normalizedMethod = when (method.lowercase()) {
+            "aes-128-cfb", "aes-192-cfb", "aes-256-cfb", "rc4-md5", "bf-cfb" -> "aes-256-gcm"
+            "chacha20" -> "chacha20-ietf-poly1305"
+            else -> method.lowercase()
         }
 
         val serverObj = JSONObject().apply {
             put("address", resolvedHostIp)
             put("port", port)
-            put("method", method)
+            put("method", normalizedMethod)
             put("password", password)
         }
         return JSONObject().apply {
             put("tag", "proxy")
             put("protocol", "shadowsocks")
             put("settings", JSONObject().apply { put("servers", JSONArray().put(serverObj)) })
+            if (params.containsKey("type") || params.containsKey("security")) {
+                put("streamSettings", buildStreamSettings(params, resolvedHostIp))
+            }
         }
     }
 
+    private fun isLikelyBase64(s: String): Boolean {
+        return !s.contains(":") && s.matches(Regex("^[A-Za-z0-9+_=-]+$"))
+    }
+
     private fun parseVmessOutbound(raw: String, resolvedHostIp: String): JSONObject {
-        val b64 = raw.substringAfter("://").trim()
+        val b64 = raw.substringAfter("://").substringBefore("#").trim()
         val j = JSONObject(decodeBase64Safe(b64))
         val originalHost = j.optString("add", "").trim()
         val port = j.optString("port", "443").toIntOrNull() ?: j.optInt("port", 443)
@@ -198,6 +216,7 @@ object CoreConfigGenerator {
         val sni = j.optString("sni", originalHost).ifBlank { originalHost }
         val wsHost = j.optString("host", originalHost).ifBlank { originalHost }
         val path = j.optString("path", "/").ifBlank { "/" }
+        val typeHeader = j.optString("type", "none").ifBlank { "none" }
 
         val userObj = JSONObject().apply {
             put("id", id)
@@ -215,6 +234,7 @@ object CoreConfigGenerator {
             "sni" to sni,
             "host" to wsHost,
             "path" to path,
+            "headerType" to typeHeader,
             "serviceName" to path.removePrefix("/")
         )
         return JSONObject().apply {
@@ -247,7 +267,7 @@ object CoreConfigGenerator {
 
         return JSONObject().apply {
             put("network", net)
-            put("security", security)
+            put("security", if (security == "tls" || security == "reality") security else "none")
             if (security == "tls") {
                 put("tlsSettings", JSONObject().apply {
                     put("serverName", sni)
