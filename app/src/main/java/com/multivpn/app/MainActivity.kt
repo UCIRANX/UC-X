@@ -1,7 +1,9 @@
 package com.multivpn.app
 
+import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -9,10 +11,15 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +32,9 @@ import com.multivpn.app.security.DeviceIdProvider
 import com.multivpn.app.security.LicenseManager
 import com.multivpn.app.security.LicenseStatus
 import com.multivpn.app.security.TimeGuard
+import com.multivpn.app.sub.PingTester
+import com.multivpn.app.sub.SubManager
+import com.multivpn.app.sub.VpnConfig
 import kotlinx.coroutines.*
 
 class MainActivity : ComponentActivity() {
@@ -54,10 +64,16 @@ fun SinglePageVpnScreen() {
     var inputCode by remember { mutableStateOf("") }
     var dialogMessage by remember { mutableStateOf("") }
 
+    var configs by remember { mutableStateOf(SubManager.loadCachedOrSampleConfigs(context)) }
     var selectedCore by remember { mutableStateOf("Auto (Smart)") }
+    var selectedConfig by remember { mutableStateOf<VpnConfig?>(configs.firstOrNull()) }
+
     var isConnected by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("آماده اتصال") }
+    var isBusy by remember { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf("آماده اتصال (${configs.size} کانفیگ آماده)") }
     var expandCoreMenu by remember { mutableStateOf(false) }
+    var showSubDialog by remember { mutableStateOf(false) }
+    var subUrlInput by remember { mutableStateOf(SubManager.getSubUrl(context)) }
 
     val cores = listOf(
         "Auto (Smart)",
@@ -67,6 +83,35 @@ fun SinglePageVpnScreen() {
         "Psiphon",
         "Tor"
     )
+
+    val filteredConfigs = remember(configs, selectedCore) {
+        if (selectedCore == "Auto (Smart)") configs
+        else configs.filter { it.coreType == selectedCore }
+    }
+
+    LaunchedEffect(filteredConfigs) {
+        if (selectedConfig == null || !filteredConfigs.any { it.id == selectedConfig?.id }) {
+            selectedConfig = filteredConfigs.firstOrNull()
+        }
+    }
+
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val best = selectedConfig ?: filteredConfigs.firstOrNull()
+            val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                putExtra("CORE_NAME", selectedCore)
+                putExtra("SERVER_NAME", best?.name ?: "Auto Server")
+                putExtra("SERVER_PING", best?.pingMs ?: -1L)
+            }
+            context.startService(serviceIntent)
+            isConnected = true
+            statusText = "متصل به: ${best?.name ?: selectedCore}"
+        } else {
+            statusText = "مجوز ساخت تونل VPN داده نشد!"
+        }
+    }
 
     LaunchedEffect(Unit) {
         TimeGuard.syncNetworkTime(context)
@@ -86,6 +131,41 @@ fun SinglePageVpnScreen() {
         }
     }
 
+    // دیالوگ تنظیم آدرس ساب‌لینک
+    if (showSubDialog) {
+        AlertDialog(
+            onDismissRequest = { showSubDialog = false },
+            title = { Text("تنظیم آدرس ساب‌لینک ترکیبی", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("لینک ساب‌اسکریپشن خود را وارد کنید (پشتیبانی از DoH ضد فیلتر):")
+                    OutlinedTextField(
+                        value = subUrlInput,
+                        onValueChange = { subUrlInput = it },
+                        label = { Text("https://...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    SubManager.setSubUrl(context, subUrlInput)
+                    showSubDialog = false
+                    Toast.makeText(context, "آدرس ساب‌لینک ذخیره شد", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("ذخیره")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSubDialog = false }) {
+                    Text("انصراف")
+                }
+            }
+        )
+    }
+
+    // دیالوگ فعال‌سازی کد ۵ روزه
     if (showLicenseDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -179,12 +259,13 @@ fun SinglePageVpnScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        // کارت وضعیت لایسنس بالا
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -192,10 +273,9 @@ fun SinglePageVpnScreen() {
                 ) {
                     Text(text = "شناسه گوشی: $formattedDeviceId", fontWeight = FontWeight.Bold)
                     TextButton(onClick = { showLicenseDialog = true }) {
-                        Text("وارد کردن کد جدید")
+                        Text("کد لایسنس")
                     }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
                 when (val s = licenseStatus) {
                     is LicenseStatus.Valid -> {
                         Text(text = "مهلت باقی‌مانده: ${LicenseManager.formatRemainingTime(s.remainingSeconds)}")
@@ -210,6 +290,7 @@ fun SinglePageVpnScreen() {
             }
         }
 
+        // دکمه بزرگ اتصال و وضعیت سرور
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             val isLicenseValid = licenseStatus is LicenseStatus.Valid
             Button(
@@ -219,33 +300,93 @@ fun SinglePageVpnScreen() {
                         showLicenseDialog = true
                         return@Button
                     }
-                    isConnected = !isConnected
                     if (isConnected) {
-                        context.startService(Intent(context, MultiCoreVpnService::class.java))
-                        statusText = "متصل به $selectedCore"
-                    } else {
+                        isConnected = false
                         context.stopService(Intent(context, MultiCoreVpnService::class.java))
                         statusText = "اتصال قطع شد"
+                    } else {
+                        val prepareIntent = VpnService.prepare(context)
+                        if (prepareIntent != null) {
+                            vpnPermissionLauncher.launch(prepareIntent)
+                        } else {
+                            val best = selectedConfig ?: filteredConfigs.firstOrNull()
+                            val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                                putExtra("CORE_NAME", selectedCore)
+                                putExtra("SERVER_NAME", best?.name ?: "Auto Server")
+                                putExtra("SERVER_PING", best?.pingMs ?: -1L)
+                            }
+                            context.startService(serviceIntent)
+                            isConnected = true
+                            statusText = "متصل به: ${best?.name ?: selectedCore}"
+                        }
                     }
                 },
-                enabled = isLicenseValid,
-                modifier = Modifier.size(160.dp)
+                enabled = isLicenseValid && !isBusy,
+                modifier = Modifier.size(145.dp)
             ) {
                 Text(if (isConnected) "قطع اتصال" else if (isLicenseValid) "اتصال" else "قفل است")
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(text = statusText)
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(text = statusText, fontWeight = FontWeight.Medium)
+            selectedConfig?.let { best ->
+                val pingStr = when {
+                    best.pingMs > 0 -> "${best.pingMs} ms"
+                    best.pingMs == -2L -> "Timeout"
+                    else -> "تست نشده"
+                }
+                Text(text = "سرور انتخابی: ${best.name} ($pingStr)")
+            }
         }
 
+        // لیست فشرده سرورها (قابل انتخاب با لمس)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(140.dp)
+        ) {
+            LazyColumn(modifier = Modifier.padding(8.dp)) {
+                items(filteredConfigs) { cfg ->
+                    val pingLabel = when {
+                        cfg.pingMs > 0 -> "${cfg.pingMs} ms"
+                        cfg.pingMs == -2L -> "خطا"
+                        else -> "---"
+                    }
+                    val isSelected = selectedConfig?.id == cfg.id
+                    TextButton(
+                        onClick = { selectedConfig = cfg },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = (if (isSelected) "✅ " else "") + "[${cfg.coreType}] ${cfg.name}",
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Text(text = pingLabel)
+                        }
+                    }
+                }
+            }
+        }
+
+        // دکمه‌های کنترل پایین صفحه
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = { expandCoreMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("هسته فعال: $selectedCore")
+                OutlinedButton(
+                    onClick = { expandCoreMenu = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("هسته فعال: $selectedCore (${filteredConfigs.size} سرور)")
                 }
-                DropdownMenu(expanded = expandCoreMenu, onDismissRequest = { expandCoreMenu = false }) {
+                DropdownMenu(
+                    expanded = expandCoreMenu,
+                    onDismissRequest = { expandCoreMenu = false }
+                ) {
                     cores.forEach { core ->
                         DropdownMenuItem(
                             text = { Text(core) },
@@ -258,12 +399,66 @@ fun SinglePageVpnScreen() {
                 }
             }
 
-            OutlinedButton(onClick = { statusText = "در حال تست پینگ کانفیگ‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
-                Text("تست پینگ")
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        isBusy = true
+                        statusText = "در حال تست پینگ موازی ${configs.size} سرور..."
+                        val tested = PingTester.pingAllConfigs(configs)
+                        configs = tested
+                        val bestValid = tested.firstOrNull {
+                            it.pingMs > 0 && (selectedCore == "Auto (Smart)" || it.coreType == selectedCore)
+                        }
+                        if (bestValid != null) {
+                            selectedConfig = bestValid
+                            statusText = "بهترین سرور: ${bestValid.name} (${bestValid.pingMs} ms)"
+                        } else {
+                            statusText = "تست پینگ تمام شد."
+                        }
+                        isBusy = false
+                    }
+                },
+                enabled = !isBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("تست پینگ و انتخاب سریع‌ترین سرور")
             }
 
-            OutlinedButton(onClick = { statusText = "در حال بروزرسانی ساب‌لینک‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
-                Text("بروزرسانی ساب‌لینک‌ها")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            isBusy = true
+                            statusText = "دریافت ساب‌لینک با DoH ضد فیلتر..."
+                            try {
+                                val fetched = SubManager.fetchAndParseSub(context)
+                                configs = fetched
+                                selectedConfig = fetched.firstOrNull()
+                                statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
+                            } catch (e: Exception) {
+                                statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
+                            }
+                            isBusy = false
+                        }
+                    },
+                    enabled = !isBusy,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("بروزرسانی ساب‌لینک")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        subUrlInput = SubManager.getSubUrl(context)
+                        showSubDialog = true
+                    },
+                    enabled = !isBusy
+                ) {
+                    Text("آدرس ساب")
+                }
             }
         }
     }
@@ -271,10 +466,53 @@ fun SinglePageVpnScreen() {
 
 class MultiCoreVpnService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var vpnInterface: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val coreName = intent?.getStringExtra("CORE_NAME") ?: "Auto (Smart)"
+        val serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
+        val serverPing = intent?.getLongExtra("SERVER_PING", -1L) ?: -1L
+
+        startVpnForegroundNotification(coreName, serverName, serverPing)
+        establishTunnel(serverName)
         startExpirationWatchdog()
         return START_STICKY
+    }
+
+    private fun establishTunnel(serverName: String) {
+        try {
+            vpnInterface?.close()
+            val builder = Builder()
+                .setSession("MultiCoreVPN - $serverName")
+                .setMtu(1500)
+                .addAddress("10.10.0.2", 24)
+                .addDnsServer("1.1.1.1")
+                .addDnsServer("8.8.8.8")
+            vpnInterface = builder.establish()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun startVpnForegroundNotification(coreName: String, serverName: String, ping: Long) {
+        val channelId = "vpn_active_channel"
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(channelId, "وضعیت اتصال فیلترشکن", NotificationManager.IMPORTANCE_LOW)
+            nm.createNotificationChannel(channel)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val pingText = if (ping > 0) " (${ping}ms)" else ""
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle("متصل به $coreName")
+            .setContentText("سرور: $serverName$pingText")
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+        startForeground(1001, notification)
     }
 
     private fun startExpirationWatchdog() {
@@ -284,11 +522,20 @@ class MultiCoreVpnService : VpnService() {
                 val status = LicenseManager.getCurrentLicenseStatus(applicationContext)
                 if (status !is LicenseStatus.Valid) {
                     sendExpirationNotification()
+                    stopTunnel()
                     stopSelf()
                     break
                 }
                 delay(5000L)
             }
+        }
+    }
+
+    private fun stopTunnel() {
+        try {
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (_: Exception) {
         }
     }
 
@@ -310,11 +557,13 @@ class MultiCoreVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        stopTunnel()
         serviceScope.cancel()
         super.onDestroy()
     }
 
     override fun onRevoke() {
+        stopTunnel()
         serviceScope.cancel()
         super.onRevoke()
         stopSelf()
