@@ -1,4 +1,4 @@
-name: Build From Uploaded ZIP
+name: Auto Extract ZIP & Build Signed APK (HMAC Phase)
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -18,34 +21,763 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract Uploaded ZIP
+      - name: Write Updated HMAC Project Files
         shell: python
         run: |
-          import os, glob, zipfile, shutil
-          zip_files = glob.glob("*.zip")
-          for zf in zip_files:
-              print(f"Extracting {zf}...")
-              os.makedirs("_temp_unzip", exist_ok=True)
-              with zipfile.ZipFile(zf, 'r') as z:
-                  z.extractall("_temp_unzip")
-              
-              source_dir = "_temp_unzip"
-              entries = [e for e in os.listdir(source_dir) if not e.startswith("__MACOSX")]
-              if len(entries) == 1 and os.path.isdir(os.path.join(source_dir, entries[0])):
-                  source_dir = os.path.join(source_dir, entries[0])
+          import os, textwrap
 
-              for item in os.listdir(source_dir):
-                  if item in [".git", "keystore"]:
-                      continue
-                  s = os.path.join(source_dir, item)
-                  d = os.path.join(".", item)
-                  if os.path.isdir(s):
-                      shutil.copytree(s, d, dirs_exist_ok=True)
-                  else:
-                      shutil.copy2(s, d)
+          def write_file(path, content):
+              os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+              lines = content.strip("\n").split("\n")
+              non_empty = [l for l in lines if l.strip()]
+              min_indent = min((len(l) - len(l.lstrip())) for l in non_empty) if non_empty else 0
+              cleaned = "\n".join(l[min_indent:] if len(l) >= min_indent else l for l in lines)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(cleaned + "\n")
 
-              shutil.rmtree("_temp_unzip", ignore_errors=True)
-              os.remove(zf)
+          print("Writing updated HMAC LicenseManager and Project files...")
+
+          write_file("gradle.properties", """
+              org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+              android.useAndroidX=true
+              kotlin.code.style=official
+              android.nonTransitiveRClass=true
+          """)
+
+          write_file("settings.gradle.kts", """
+              pluginManagement {
+                  repositories {
+                      google()
+                      mavenCentral()
+                      gradlePluginPortal()
+                  }
+              }
+              dependencyResolutionManagement {
+                  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+                  repositories {
+                      google()
+                      mavenCentral()
+                      maven { url = uri("https://jitpack.io") }
+                  }
+              }
+              rootProject.name = "MultiCoreVPN"
+              include(":app")
+          """)
+
+          write_file("build.gradle.kts", """
+              plugins {
+                  id("com.android.application") version "8.5.2" apply false
+                  id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+                  id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+              }
+          """)
+
+          write_file("app/build.gradle.kts", """
+              plugins {
+                  id("com.android.application")
+                  id("org.jetbrains.kotlin.android")
+                  id("org.jetbrains.kotlin.plugin.compose")
+              }
+
+              val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+
+              android {
+                  namespace = "com.multivpn.app"
+                  compileSdk = 34
+
+                  defaultConfig {
+                      applicationId = "com.multivpn.app"
+                      minSdk = 24
+                      targetSdk = 34
+                      versionCode = runNumber
+                      versionName = "1.3.$runNumber"
+                  }
+
+                  signingConfigs {
+                      create("permanentSign") {
+                          storeFile = rootProject.file("keystore/app.jks")
+                          storePassword = "MultiVpnPassword123"
+                          keyAlias = "multivpn"
+                          keyPassword = "MultiVpnPassword123"
+                      }
+                  }
+
+                  buildTypes {
+                      debug {
+                          signingConfig = signingConfigs.getByName("permanentSign")
+                      }
+                      release {
+                          isMinifyEnabled = false
+                          signingConfig = signingConfigs.getByName("permanentSign")
+                      }
+                  }
+
+                  compileOptions {
+                      sourceCompatibility = JavaVersion.VERSION_17
+                      targetCompatibility = JavaVersion.VERSION_17
+                  }
+
+                  kotlinOptions {
+                      jvmTarget = "17"
+                  }
+
+                  buildFeatures {
+                      compose = true
+                  }
+              }
+
+              dependencies {
+                  val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+                  implementation(composeBom)
+                  implementation("androidx.activity:activity-compose:1.9.0")
+                  implementation("androidx.compose.ui:ui")
+                  implementation("androidx.compose.material3:material3")
+                  implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+                  implementation("androidx.core:core-ktx:1.13.1")
+                  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+                  implementation("com.squareup.okhttp3:okhttp:4.12.0")
+                  implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
+                  implementation("androidx.security:security-crypto:1.1.0-alpha06")
+              }
+          """)
+
+          write_file("app/src/main/AndroidManifest.xml", """
+              <?xml version="1.0" encoding="utf-8"?>
+              <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                  <uses-permission android:name="android.permission.INTERNET" />
+                  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+                  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+                  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+                  <application
+                      android:allowBackup="false"
+                      android:icon="@android:drawable/sym_def_app_icon"
+                      android:label="MultiCore VPN"
+                      android:supportsRtl="true"
+                      android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                      <activity
+                          android:name=".MainActivity"
+                          android:exported="true">
+                          <intent-filter>
+                              <action android:name="android.intent.action.MAIN" />
+                              <category android:name="android.intent.category.LAUNCHER" />
+                          </intent-filter>
+                      </activity>
+
+                      <service
+                          android:name=".MultiCoreVpnService"
+                          android:exported="false"
+                          android:permission="android.permission.BIND_VPN_SERVICE"
+                          android:foregroundServiceType="specialUse">
+                          <intent-filter>
+                              <action android:name="android.net.VpnService" />
+                          </intent-filter>
+                          <property
+                              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                              android:value="vpn" />
+                      </service>
+                  </application>
+              </manifest>
+          """)
+
+          # کلاس DeviceIdProvider
+          write_file("app/src/main/java/com/multivpn/app/security/DeviceIdProvider.kt", """
+              package com.multivpn.app.security
+
+              import android.annotation.SuppressLint
+              import android.content.Context
+              import android.os.Build
+              import android.provider.Settings
+              import java.security.MessageDigest
+
+              object DeviceIdProvider {
+                  private const val ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+                  @SuppressLint("HardwareIds")
+                  fun getCleanDeviceId(context: Context): String {
+                      val androidId = Settings.Secure.getString(
+                          context.contentResolver,
+                          Settings.Secure.ANDROID_ID
+                      ) ?: "unknown_id"
+
+                      val rawFingerprint = "$androidId-${Build.BOARD}-${Build.BRAND}-${Build.DEVICE}-${Build.HARDWARE}"
+                      val digest = MessageDigest.getInstance("SHA-256").digest(rawFingerprint.toByteArray(Charsets.UTF_8))
+
+                      val sb = StringBuilder(8)
+                      for (i in 0 until 8) {
+                          val index = (digest[i].toInt() and 0xFF) % ALPHABET.length
+                          sb.append(ALPHABET[index])
+                      }
+                      return sb.toString()
+                  }
+
+                  fun getFormattedDeviceId(context: Context): String {
+                      val clean = getCleanDeviceId(context)
+                      return "${clean.substring(0, 4)}-${clean.substring(4, 8)}"
+                  }
+              }
+          """)
+
+          # کلاس TimeGuard
+          write_file("app/src/main/java/com/multivpn/app/security/TimeGuard.kt", """
+              package com.multivpn.app.security
+
+              import android.content.Context
+              import android.content.SharedPreferences
+              import android.os.SystemClock
+              import androidx.security.crypto.EncryptedSharedPreferences
+              import androidx.security.crypto.MasterKey
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.withContext
+              import okhttp3.OkHttpClient
+              import okhttp3.Request
+              import java.text.SimpleDateFormat
+              import java.util.Locale
+              import java.util.concurrent.TimeUnit
+              import kotlin.math.max
+
+              object TimeGuard {
+                  private const val PREF_FILE = "secure_time_prefs"
+                  private const val KEY_MAX_SEEN_EPOCH = "max_seen_epoch_sec"
+
+                  @Volatile
+                  private var anchorNetworkEpochSec: Long = 0L
+
+                  @Volatile
+                  private var anchorElapsedRealtimeSec: Long = 0L
+
+                  private val httpClient = OkHttpClient.Builder()
+                      .connectTimeout(4, TimeUnit.SECONDS)
+                      .readTimeout(4, TimeUnit.SECONDS)
+                      .followRedirects(false)
+                      .build()
+
+                  private val timeUrls = listOf(
+                      "https://www.digikala.com",
+                      "https://www.aparat.com",
+                      "http://cp.cloudflare.com/generate_204",
+                      "https://www.google.com"
+                  )
+
+                  fun getSecurePrefs(context: Context): SharedPreferences {
+                      return try {
+                          val masterKey = MasterKey.Builder(context)
+                              .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                              .build()
+                          EncryptedSharedPreferences.create(
+                              context,
+                              PREF_FILE,
+                              masterKey,
+                              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                          )
+                      } catch (e: Exception) {
+                          context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+                      }
+                  }
+
+                  suspend fun syncNetworkTime(context: Context): Boolean = withContext(Dispatchers.IO) {
+                      for (url in timeUrls) {
+                          try {
+                              val request = Request.Builder().url(url).head().build()
+                              httpClient.newCall(request).execute().use { response ->
+                                  val dateHeader = response.header("Date")
+                                  if (!dateHeader.isNullOrBlank()) {
+                                      val sdf = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
+                                      val parsedDate = sdf.parse(dateHeader)
+                                      if (parsedDate != null) {
+                                          val serverSec = parsedDate.time / 1000L
+                                          if (serverSec > 1700000000L) {
+                                              anchorNetworkEpochSec = serverSec
+                                              anchorElapsedRealtimeSec = SystemClock.elapsedRealtime() / 1000L
+                                              updateMaxSeenTime(context, serverSec)
+                                              return@withContext true
+                                          }
+                                      }
+                                  }
+                              }
+                          } catch (_: Exception) {
+                          }
+                      }
+                      false
+                  }
+
+                  fun isClockTampered(context: Context): Boolean {
+                      val prefs = getSecurePrefs(context)
+                      val maxSeen = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
+                      val currentWallSec = System.currentTimeMillis() / 1000L
+
+                      if (anchorNetworkEpochSec > 0L) return false
+                      if (maxSeen > 0L && currentWallSec + 300L < maxSeen) return true
+
+                      updateMaxSeenTime(context, currentWallSec)
+                      return false
+                  }
+
+                  fun getCurrentVerifiedTimeSec(context: Context): Long {
+                      val nowElapsedSec = SystemClock.elapsedRealtime() / 1000L
+                      val currentWallSec = System.currentTimeMillis() / 1000L
+                      val prefs = getSecurePrefs(context)
+                      val maxSeen = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
+
+                      val estimatedSec = if (anchorNetworkEpochSec > 0L) {
+                          anchorNetworkEpochSec + (nowElapsedSec - anchorElapsedRealtimeSec)
+                      } else {
+                          max(currentWallSec, maxSeen)
+                      }
+
+                      updateMaxSeenTime(context, estimatedSec)
+                      return estimatedSec
+                  }
+
+                  private fun updateMaxSeenTime(context: Context, newTimeSec: Long) {
+                      val prefs = getSecurePrefs(context)
+                      val currentMax = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
+                      if (newTimeSec > currentMax) {
+                          prefs.edit().putLong(KEY_MAX_SEEN_EPOCH, newTimeSec).apply()
+                      }
+                  }
+              }
+          """)
+
+          # کلاس LicenseManager سازگار با HMAC-SHA256
+          write_file("app/src/main/java/com/multivpn/app/security/LicenseManager.kt", """
+              package com.multivpn.app.security
+
+              import android.content.Context
+              import android.util.Base64
+              import java.nio.ByteBuffer
+              import javax.crypto.Mac
+              import javax.crypto.spec.SecretKeySpec
+
+              sealed class LicenseStatus {
+                  data class Valid(val remainingSeconds: Long, val expiryEpochSec: Long) : LicenseStatus()
+                  data class Expired(val message: String) : LicenseStatus()
+                  data class Invalid(val reason: String) : LicenseStatus()
+                  object Missing : LicenseStatus()
+              }
+
+              object LicenseManager {
+                  private const val KEY_SAVED_TOKEN = "saved_license_token"
+                  private const val SECRET_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+                  private fun hexToBytes(hex: String): ByteArray {
+                      val len = hex.length
+                      val data = ByteArray(len / 2)
+                      var i = 0
+                      while (i < len) {
+                          data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+                          i += 2
+                      }
+                      return data
+                  }
+
+                  fun verifyAndSaveToken(context: Context, rawInput: String): LicenseStatus {
+                      val status = verifyTokenInternal(context, rawInput)
+                      if (status is LicenseStatus.Valid) {
+                          TimeGuard.getSecurePrefs(context)
+                              .edit()
+                              .putString(KEY_SAVED_TOKEN, rawInput.trim())
+                              .apply()
+                      }
+                      return status
+                  }
+
+                  fun getCurrentLicenseStatus(context: Context): LicenseStatus {
+                      val saved = TimeGuard.getSecurePrefs(context).getString(KEY_SAVED_TOKEN, null)
+                      if (saved.isNullOrBlank()) return LicenseStatus.Missing
+                      return verifyTokenInternal(context, saved)
+                  }
+
+                  private fun verifyTokenInternal(context: Context, rawInput: String): LicenseStatus {
+                      if (TimeGuard.isClockTampered(context)) {
+                          return LicenseStatus.Invalid("ساعت گوشی به عقب کشیده شده است! لطفاً تاریخ و ساعت گوشی را به حالت خودکار برگردانید.")
+                      }
+
+                      val cleaned = rawInput.trim().removePrefix("MV2-").removePrefix("mv2-").removePrefix("MV1-").removePrefix("mv1-")
+                      val decoded: ByteArray = try {
+                          Base64.decode(cleaned, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                      } catch (e: Exception) {
+                          return LicenseStatus.Invalid("فرمت کد وارد شده نامعتبر است.")
+                      }
+
+                      if (decoded.size != 48) {
+                          return LicenseStatus.Invalid("طول کد لایسنس صحیح نیست.")
+                      }
+
+                      val payload = decoded.copyOfRange(0, 16)
+                      val signature = decoded.copyOfRange(16, 48)
+
+                      val isSignatureValid = try {
+                          val secretBytes = hexToBytes(SECRET_KEY_HEX)
+                          val mac = Mac.getInstance("HmacSHA256")
+                          mac.init(SecretKeySpec(secretBytes, "HmacSHA256"))
+                          val computedSig = mac.doFinal(payload)
+                          computedSig.contentEquals(signature)
+                      } catch (e: Exception) {
+                          false
+                      }
+
+                      if (!isSignatureValid) {
+                          return LicenseStatus.Invalid("امضای دیجیتال کد نامعتبر است یا دستکاری شده است.")
+                      }
+
+                      val tokenDeviceId = String(payload, 0, 8, Charsets.US_ASCII).trim()
+                      val myDeviceId = DeviceIdProvider.getCleanDeviceId(context)
+
+                      if (!tokenDeviceId.equals(myDeviceId, ignoreCase = true)) {
+                          return LicenseStatus.Invalid("این کد متعلق به این گوشی نیست! (قفل تک‌دستگاهی)")
+                      }
+
+                      val expiryEpoch = ByteBuffer.wrap(payload, 8, 8).long
+                      val nowSec = TimeGuard.getCurrentVerifiedTimeSec(context)
+
+                      val remaining = expiryEpoch - nowSec
+                      return if (remaining <= 0L) {
+                          LicenseStatus.Expired("مهلت استفاده ۵ روزه این کد تمام شده است. لطفاً از ربات تلگرام کد جدید بگیرید.")
+                      } else {
+                          LicenseStatus.Valid(remainingSeconds = remaining, expiryEpochSec = expiryEpoch)
+                      }
+                  }
+
+                  fun formatRemainingTime(seconds: Long): String {
+                      if (seconds <= 0) return "منقضی شده"
+                      val days = seconds / 86400
+                      val hours = (seconds % 86400) / 3600
+                      val mins = (seconds % 3600) / 60
+                      val secs = seconds % 60
+                      return "${days} روز و ${hours} ساعت و ${mins} دقیقه و ${secs} ثانیه"
+                  }
+              }
+          """)
+
+          # فایل MainActivity
+          write_file("app/src/main/java/com/multivpn/app/MainActivity.kt", """
+              package com.multivpn.app
+
+              import android.app.NotificationChannel
+              import android.app.NotificationManager
+              import android.content.ClipData
+              import android.content.ClipboardManager
+              import android.content.Context
+              import android.content.Intent
+              import android.net.VpnService
+              import android.os.Build
+              import android.os.Bundle
+              import android.widget.Toast
+              import androidx.activity.ComponentActivity
+              import androidx.activity.compose.setContent
+              import androidx.compose.foundation.layout.*
+              import androidx.compose.material3.*
+              import androidx.compose.runtime.*
+              import androidx.compose.ui.Alignment
+              import androidx.compose.ui.Modifier
+              import androidx.compose.ui.platform.LocalContext
+              import androidx.compose.ui.text.font.FontWeight
+              import androidx.compose.ui.unit.dp
+              import androidx.core.app.NotificationCompat
+              import com.multivpn.app.security.DeviceIdProvider
+              import com.multivpn.app.security.LicenseManager
+              import com.multivpn.app.security.LicenseStatus
+              import com.multivpn.app.security.TimeGuard
+              import kotlinx.coroutines.*
+
+              class MainActivity : ComponentActivity() {
+                  override fun onCreate(savedInstanceState: Bundle?) {
+                      super.onCreate(savedInstanceState)
+                      setContent {
+                          MaterialTheme {
+                              Surface(
+                                  modifier = Modifier.fillMaxSize(),
+                                  color = MaterialTheme.colorScheme.background
+                              ) {
+                                  SinglePageVpnScreen()
+                              }
+                          }
+                      }
+                  }
+              }
+
+              @Composable
+              fun SinglePageVpnScreen() {
+                  val context = LocalContext.current
+                  val scope = rememberCoroutineScope()
+
+                  val formattedDeviceId = remember { DeviceIdProvider.getFormattedDeviceId(context) }
+                  var licenseStatus by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
+                  var showLicenseDialog by remember { mutableStateOf(licenseStatus !is LicenseStatus.Valid) }
+                  var inputCode by remember { mutableStateOf("") }
+                  var dialogMessage by remember { mutableStateOf("") }
+
+                  var selectedCore by remember { mutableStateOf("Auto (Smart)") }
+                  var isConnected by remember { mutableStateOf(false) }
+                  var statusText by remember { mutableStateOf("آماده اتصال") }
+                  var expandCoreMenu by remember { mutableStateOf(false) }
+
+                  val cores = listOf(
+                      "Auto (Smart)",
+                      "Sing-box (Xray)",
+                      "AmneziaWG",
+                      "OpenVPN",
+                      "Psiphon",
+                      "Tor"
+                  )
+
+                  LaunchedEffect(Unit) {
+                      TimeGuard.syncNetworkTime(context)
+                      while (isActive) {
+                          val current = LicenseManager.getCurrentLicenseStatus(context)
+                          licenseStatus = current
+
+                          if (current !is LicenseStatus.Valid) {
+                              if (isConnected) {
+                                  isConnected = false
+                                  context.stopService(Intent(context, MultiCoreVpnService::class.java))
+                                  statusText = "قطع خودکار: مهلت ۵ روزه به پایان رسید!"
+                              }
+                              showLicenseDialog = true
+                          }
+                          delay(1000L)
+                      }
+                  }
+
+                  if (showLicenseDialog) {
+                      AlertDialog(
+                          onDismissRequest = {
+                              if (licenseStatus is LicenseStatus.Valid) {
+                                  showLicenseDialog = false
+                              }
+                          },
+                          title = {
+                              Text(
+                                  text = if (licenseStatus is LicenseStatus.Expired) "پایان مهلت ۵ روزه!" else "فعال‌سازی برنامه (کد ۵ روزه)",
+                                  fontWeight = FontWeight.Bold
+                              )
+                          },
+                          text = {
+                              Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  val reasonText = when (val s = licenseStatus) {
+                                      is LicenseStatus.Expired -> s.message
+                                      is LicenseStatus.Invalid -> s.reason
+                                      is LicenseStatus.Missing -> "برای استفاده از فیلترشکن، شناسه دستگاه زیر را به ربات تلگرام بفرستید و کد ۵ روزه دریافتی را وارد کنید."
+                                      is LicenseStatus.Valid -> "کد شما فعال است. می‌توانید کد ۵ روزه جدیدی جایگزین کنید."
+                                  }
+                                  Text(text = reasonText)
+
+                                  Card(modifier = Modifier.fillMaxWidth()) {
+                                      Row(
+                                          modifier = Modifier
+                                              .fillMaxWidth()
+                                              .padding(12.dp),
+                                          horizontalArrangement = Arrangement.SpaceBetween,
+                                          verticalAlignment = Alignment.CenterVertically
+                                      ) {
+                                          Column {
+                                              Text("شناسه دستگاه شما:")
+                                              Text(text = formattedDeviceId, fontWeight = FontWeight.Bold)
+                                          }
+                                          Button(onClick = {
+                                              val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                              clipboard.setPrimaryClip(ClipData.newPlainText("DeviceID", formattedDeviceId))
+                                              Toast.makeText(context, "شناسه دستگاه کپی شد", Toast.LENGTH_SHORT).show()
+                                          }) {
+                                              Text("کپی")
+                                          }
+                                      }
+                                  }
+
+                                  OutlinedTextField(
+                                      value = inputCode,
+                                      onValueChange = { inputCode = it },
+                                      label = { Text("کد دریافتی از ربات (MV2-...)") },
+                                      singleLine = true,
+                                      modifier = Modifier.fillMaxWidth()
+                                  )
+
+                                  if (dialogMessage.isNotBlank()) {
+                                      Text(text = dialogMessage, color = MaterialTheme.colorScheme.error)
+                                  }
+                              }
+                          },
+                          confirmButton = {
+                              Button(onClick = {
+                                  scope.launch {
+                                      TimeGuard.syncNetworkTime(context)
+                                      val result = LicenseManager.verifyAndSaveToken(context, inputCode)
+                                      licenseStatus = result
+                                      when (result) {
+                                          is LicenseStatus.Valid -> {
+                                              dialogMessage = ""
+                                              inputCode = ""
+                                              showLicenseDialog = false
+                                              statusText = "کد ۵ روزه تایید شد! آماده اتصال"
+                                          }
+                                          is LicenseStatus.Expired -> dialogMessage = result.message
+                                          is LicenseStatus.Invalid -> dialogMessage = result.reason
+                                          LicenseStatus.Missing -> dialogMessage = "لطفاً کد را وارد کنید."
+                                      }
+                                  }
+                              }) {
+                                  Text("بررسی و فعال‌سازی")
+                              }
+                          },
+                          dismissButton = {
+                              if (licenseStatus is LicenseStatus.Valid) {
+                                  TextButton(onClick = { showLicenseDialog = false }) {
+                                      Text("بستن")
+                                  }
+                              }
+                          }
+                      )
+                  }
+
+                  Column(
+                      modifier = Modifier
+                          .fillMaxSize()
+                          .padding(24.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.SpaceBetween
+                  ) {
+                      Card(modifier = Modifier.fillMaxWidth()) {
+                          Column(modifier = Modifier.padding(16.dp)) {
+                              Row(
+                                  modifier = Modifier.fillMaxWidth(),
+                                  horizontalArrangement = Arrangement.SpaceBetween,
+                                  verticalAlignment = Alignment.CenterVertically
+                              ) {
+                                  Text(text = "شناسه گوشی: $formattedDeviceId", fontWeight = FontWeight.Bold)
+                                  TextButton(onClick = { showLicenseDialog = true }) {
+                                      Text("وارد کردن کد جدید")
+                                  }
+                              }
+                              Spacer(modifier = Modifier.height(4.dp))
+                              when (val s = licenseStatus) {
+                                  is LicenseStatus.Valid -> {
+                                      Text(text = "مهلت باقی‌مانده: ${LicenseManager.formatRemainingTime(s.remainingSeconds)}")
+                                  }
+                                  is LicenseStatus.Expired -> {
+                                      Text(text = "وضعیت: مهلت ۵ روزه تمام شده است!", color = MaterialTheme.colorScheme.error)
+                                  }
+                                  else -> {
+                                      Text(text = "وضعیت: قفل (کد ۵ روزه وارد نشده)", color = MaterialTheme.colorScheme.error)
+                                  }
+                              }
+                          }
+                      }
+
+                      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                          val isLicenseValid = licenseStatus is LicenseStatus.Valid
+                          Button(
+                              onClick = {
+                                  val currentCheck = LicenseManager.getCurrentLicenseStatus(context)
+                                  if (currentCheck !is LicenseStatus.Valid) {
+                                      showLicenseDialog = true
+                                      return@Button
+                                  }
+                                  isConnected = !isConnected
+                                  if (isConnected) {
+                                      context.startService(Intent(context, MultiCoreVpnService::class.java))
+                                      statusText = "متصل به $selectedCore"
+                                  } else {
+                                      context.stopService(Intent(context, MultiCoreVpnService::class.java))
+                                      statusText = "اتصال قطع شد"
+                                  }
+                              },
+                              enabled = isLicenseValid,
+                              modifier = Modifier.size(160.dp)
+                          ) {
+                              Text(if (isConnected) "قطع اتصال" else if (isLicenseValid) "اتصال" else "قفل است")
+                          }
+                          Spacer(modifier = Modifier.height(16.dp))
+                          Text(text = statusText)
+                      }
+
+                      Column(
+                          modifier = Modifier.fillMaxWidth(),
+                          verticalArrangement = Arrangement.spacedBy(10.dp)
+                      ) {
+                          Box(modifier = Modifier.fillMaxWidth()) {
+                              OutlinedButton(onClick = { expandCoreMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                                  Text("هسته فعال: $selectedCore")
+                              }
+                              DropdownMenu(expanded = expandCoreMenu, onDismissRequest = { expandCoreMenu = false }) {
+                                  cores.forEach { core ->
+                                      DropdownMenuItem(
+                                          text = { Text(core) },
+                                          onClick = {
+                                              selectedCore = core
+                                              expandCoreMenu = false
+                                          }
+                                      )
+                                  }
+                              }
+                          }
+
+                          OutlinedButton(onClick = { statusText = "در حال تست پینگ کانفیگ‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
+                              Text("تست پینگ")
+                          }
+
+                          OutlinedButton(onClick = { statusText = "در حال بروزرسانی ساب‌لینک‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
+                              Text("بروزرسانی ساب‌لینک‌ها")
+                          }
+                      }
+                  }
+              }
+
+              class MultiCoreVpnService : VpnService() {
+                  private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+                  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                      startExpirationWatchdog()
+                      return START_STICKY
+                  }
+
+                  private fun startExpirationWatchdog() {
+                      serviceScope.coroutineContext.cancelChildren()
+                      serviceScope.launch {
+                          while (isActive) {
+                              val status = LicenseManager.getCurrentLicenseStatus(applicationContext)
+                              if (status !is LicenseStatus.Valid) {
+                                  sendExpirationNotification()
+                                  stopSelf()
+                                  break
+                              }
+                              delay(5000L)
+                          }
+                      }
+                  }
+
+                  private fun sendExpirationNotification() {
+                      val channelId = "vpn_expiry_alert"
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          val channel = NotificationChannel(channelId, "هشدار انقضای کد ۵ روزه", NotificationManager.IMPORTANCE_HIGH)
+                          nm.createNotificationChannel(channel)
+                      }
+                      val notification = NotificationCompat.Builder(this, channelId)
+                          .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                          .setContentTitle("مهلت ۵ روزه به پایان رسید")
+                          .setContentText("اتصال فیلترشکن قطع شد. لطفاً کد جدید را از ربات تلگرام دریافت و وارد کنید.")
+                          .setPriority(NotificationCompat.PRIORITY_HIGH)
+                          .setAutoCancel(true)
+                          .build()
+                      nm.notify(1002, notification)
+                  }
+
+                  override fun onDestroy() {
+                      serviceScope.cancel()
+                      super.onDestroy()
+                  }
+
+                  override fun onRevoke() {
+                      serviceScope.cancel()
+                      super.onRevoke()
+                      stopSelf()
+                  }
+              }
+          """)
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -60,16 +792,19 @@ jobs:
             keytool -genkeypair -v -keystore keystore/app.jks -keyalg RSA -keysize 2048 -validity 10000 -alias multivpn -storepass MultiVpnPassword123 -keypass MultiVpnPassword123 -dname "CN=MultiVPN"
           fi
 
-      - name: Commit Extracted Files
+      - name: Commit Updated Files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if ! git diff --staged --quiet; then
-            git commit -m "Auto-update from uploaded zip [skip ci]"
+            git commit -m "Update project to HMAC-SHA256 license system [skip ci]"
             git pull --rebase || true
             git push || true
           fi
+
+      - name: Accept Android SDK Licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -79,8 +814,10 @@ jobs:
       - name: Build Signed APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload Signed APK
+        export path: app/build/outputs/apk/debug/*.apk
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MultiCoreVPN-Signed
+          name: MultiCoreVPN-HMAC-Signed
           path: app/build/outputs/apk/debug/*.apk
