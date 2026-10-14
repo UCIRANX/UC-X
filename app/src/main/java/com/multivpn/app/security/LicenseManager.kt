@@ -2,9 +2,9 @@ package com.multivpn.app.security
 
 import android.content.Context
 import android.util.Base64
-import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
-import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.nio.ByteBuffer
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 sealed class LicenseStatus {
     data class Valid(val remainingSeconds: Long, val expiryEpochSec: Long) : LicenseStatus()
@@ -15,7 +15,9 @@ sealed class LicenseStatus {
 
 object LicenseManager {
     private const val KEY_SAVED_TOKEN = "saved_license_token"
-    private const val PUBLIC_KEY_HEX = "1e11705bc52f183c8ea574ff74a44010501b63846ce11e54d1a2bf0928fcc472"
+    
+    // همان کلید مخفی مشترک با کلودفلر (باید دقیقاً هماهنگ باشد)
+    private const val SECRET_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
     private fun hexToBytes(hex: String): ByteArray {
         val len = hex.length
@@ -50,27 +52,27 @@ object LicenseManager {
             return LicenseStatus.Invalid("ساعت گوشی به عقب کشیده شده است! لطفاً تاریخ و ساعت گوشی را به حالت خودکار برگردانید.")
         }
 
-        val cleaned = rawInput.trim().removePrefix("MV1-").removePrefix("mv1-")
+        val cleaned = rawInput.trim().removePrefix("MV2-").removePrefix("mv2-").removePrefix("MV1-").removePrefix("mv1-")
         val decoded: ByteArray = try {
             Base64.decode(cleaned, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         } catch (e: Exception) {
             return LicenseStatus.Invalid("فرمت کد وارد شده نامعتبر است.")
         }
 
-        // ساختار باینری: 8 بایت شناسه دستگاه + 8 بایت زمان انقضا + 64 بایت امضای Ed25519 = 80 بایت
-        if (decoded.size != 80) {
+        // ساختار جدید: 16 بایت پِی‌لود + 32 بایت امضای HMAC = 48 بایت
+        if (decoded.size != 48) {
             return LicenseStatus.Invalid("طول کد لایسنس صحیح نیست.")
         }
 
         val payload = decoded.copyOfRange(0, 16)
-        val signature = decoded.copyOfRange(16, 80)
+        val signature = decoded.copyOfRange(16, 48)
 
         val isSignatureValid = try {
-            val pubKeyParams = Ed25519PublicKeyParameters(hexToBytes(PUBLIC_KEY_HEX), 0)
-            val verifier = Ed25519Signer()
-            verifier.init(false, pubKeyParams)
-            verifier.update(payload, 0, payload.size)
-            verifier.verifySignature(signature)
+            val secretBytes = hexToBytes(SECRET_KEY_HEX)
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(secretBytes, "HmacSHA256"))
+            val computedSig = mac.doFinal(payload)
+            computedSig.contentEquals(signature)
         } catch (e: Exception) {
             false
         }
@@ -79,21 +81,21 @@ object LicenseManager {
             return LicenseStatus.Invalid("امضای دیجیتال کد نامعتبر است یا دستکاری شده است.")
         }
 
-        val tokenDeviceId = String(payload, 0, 8, Charsets.US_ASCII)
+        val tokenDeviceId = String(payload, 0, 8, Charsets.US_ASCII).trim()
         val myDeviceId = DeviceIdProvider.getCleanDeviceId(context)
 
         if (!tokenDeviceId.equals(myDeviceId, ignoreCase = true)) {
             return LicenseStatus.Invalid("این کد متعلق به این گوشی نیست! (قفل تک‌دستگاهی)")
         }
 
-        val expiryEpochSec = ByteBuffer.wrap(payload, 8, 8).long
+        val expiryEpoch = ByteBuffer.wrap(payload, 8, 8).long
         val nowSec = TimeGuard.getCurrentVerifiedTimeSec(context)
 
-        val remaining = expiryEpochSec - nowSec
+        val remaining = expiryEpoch - nowSec
         return if (remaining <= 0L) {
             LicenseStatus.Expired("مهلت استفاده ۵ روزه این کد تمام شده است. لطفاً از ربات تلگرام کد جدید بگیرید.")
         } else {
-            LicenseStatus.Valid(remainingSeconds = remaining, expiryEpochSec = expiryEpochSec)
+            LicenseStatus.Valid(remainingSeconds = remaining, expiryEpochSec = expiryEpoch)
         }
     }
 
@@ -106,4 +108,3 @@ object LicenseManager {
         return "${days} روز و ${hours} ساعت و ${mins} دقیقه و ${secs} ثانیه"
     }
 }
-    
