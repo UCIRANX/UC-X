@@ -36,7 +36,7 @@ if __name__ == "__main__":
     import telebot
 
     BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE")
-    if BOT_TOKEN == "8714396305:AAHJvEZdylAJw2xfqY97Xzab-1vCPioW3L8":
+    if BOT_TOKEN == "PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE":
         print("لطفاً توکن ربات تلگرام خود را در متغیر محیطی BOT_TOKEN یا داخل فایل bot.py قرار دهید.")
         sys.exit(1)
 
