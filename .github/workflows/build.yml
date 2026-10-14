@@ -37,14 +37,14 @@ jobs:
 
           print("Generating Phase 3 files (DoH, SubManager, PingTester, UI)...")
 
-          write_file("gradle.properties", """
+          write_file("gradle.properties", r"""
               org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
               android.useAndroidX=true
               kotlin.code.style=official
               android.nonTransitiveRClass=true
           """)
 
-          write_file("settings.gradle.kts", """
+          write_file("settings.gradle.kts", r"""
               pluginManagement {
                   repositories {
                       google()
@@ -64,7 +64,7 @@ jobs:
               include(":app")
           """)
 
-          write_file("build.gradle.kts", """
+          write_file("build.gradle.kts", r"""
               plugins {
                   id("com.android.application") version "8.5.2" apply false
                   id("org.jetbrains.kotlin.android") version "2.0.21" apply false
@@ -72,7 +72,7 @@ jobs:
               }
           """)
 
-          write_file("app/build.gradle.kts", """
+          write_file("app/build.gradle.kts", r"""
               plugins {
                   id("com.android.application")
                   id("org.jetbrains.kotlin.android")
@@ -89,7 +89,7 @@ jobs:
                       applicationId = "com.multivpn.app"
                       minSdk = 24
                       targetSdk = 34
-                      versionCode = runNumber + 100
+                      versionCode = runNumber + 200
                       versionName = "1.4.$runNumber"
                   }
 
@@ -131,6 +131,7 @@ jobs:
                   implementation(composeBom)
                   implementation("androidx.activity:activity-compose:1.9.0")
                   implementation("androidx.compose.ui:ui")
+                  implementation("androidx.compose.foundation:foundation")
                   implementation("androidx.compose.material3:material3")
                   implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
                   implementation("androidx.core:core-ktx:1.13.1")
@@ -141,7 +142,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/AndroidManifest.xml", """
+          write_file("app/src/main/AndroidManifest.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <manifest xmlns:android="http://schemas.android.com/apk/res/android">
                   <uses-permission android:name="android.permission.INTERNET" />
@@ -182,8 +183,7 @@ jobs:
               </manifest>
           """)
 
-          # 1. DeviceIdProvider
-          write_file("app/src/main/java/com/multivpn/app/security/DeviceIdProvider.kt", """
+          write_file("app/src/main/java/com/multivpn/app/security/DeviceIdProvider.kt", r"""
               package com.multivpn.app.security
 
               import android.annotation.SuppressLint
@@ -220,8 +220,7 @@ jobs:
               }
           """)
 
-          # 2. TimeGuard
-          write_file("app/src/main/java/com/multivpn/app/security/TimeGuard.kt", """
+          write_file("app/src/main/java/com/multivpn/app/security/TimeGuard.kt", r"""
               package com.multivpn.app.security
 
               import android.content.Context
@@ -342,8 +341,7 @@ jobs:
               }
           """)
 
-          # 3. LicenseManager (HMAC-SHA256)
-          write_file("app/src/main/java/com/multivpn/app/security/LicenseManager.kt", """
+          write_file("app/src/main/java/com/multivpn/app/security/LicenseManager.kt", r"""
               package com.multivpn.app.security
 
               import android.content.Context
@@ -453,8 +451,7 @@ jobs:
               }
           """)
 
-          # 4. DohClient (DNS over HTTPS for anti-filtering sub-link fetch)
-          write_file("app/src/main/java/com/multivpn/app/sub/DohClient.kt", """
+          write_file("app/src/main/java/com/multivpn/app/sub/DohClient.kt", r"""
               package com.multivpn.app.sub
 
               import kotlinx.coroutines.Dispatchers
@@ -507,8 +504,7 @@ jobs:
               }
           """)
 
-          # 5. SubManager (Unified Sub-link Parser for Xray/Sing-box, AmneziaWG, OpenVPN, Psiphon, Tor)
-          write_file("app/src/main/java/com/multivpn/app/sub/SubManager.kt", """
+          write_file("app/src/main/java/com/multivpn/app/sub/SubManager.kt", r"""
               package com.multivpn.app.sub
 
               import android.content.Context
@@ -534,7 +530,6 @@ jobs:
                   private const val KEY_SUB_URL = "saved_sub_url"
                   private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-                  // آدرس پیش‌فرض ساب‌لینک (قابل تغییر توسط کاربر در برنامه)
                   const val DEFAULT_SUB_URL = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
 
                   fun getSubUrl(context: Context): String {
@@ -565,7 +560,7 @@ jobs:
                       val trimmed = rawText.trim()
                       val decodedContent = if (!trimmed.contains("://") && !trimmed.contains("[Interface]")) {
                           try {
-                              val cleanB64 = trimmed.replace("\\s".toRegex(), "")
+                              val cleanB64 = trimmed.filterNot { it.isWhitespace() }
                               String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
                           } catch (e: Exception) {
                               trimmed
@@ -619,7 +614,7 @@ jobs:
                                   }
                               }
                               line.startsWith("remote ", ignoreCase = true) -> {
-                                  val parts = line.split("\\s+".toRegex())
+                                  val parts = line.split(' ', '\t').filter { it.isNotBlank() }
                                   if (parts.size >= 3) {
                                       val host = parts[1]
                                       val port = parts[2].toIntOrNull() ?: 1194
@@ -639,7 +634,6 @@ jobs:
                           if (list.size >= 40) break
                       }
 
-                      // همیشه هسته‌های داخلی Psiphon و Tor را نیز در انتهای لیست اضافه می‌کنیم
                       list.addAll(getBuiltInFallbackNodes())
                       return list
                   }
@@ -653,7 +647,7 @@ jobs:
                           val port = json.optString("port", "443").toIntOrNull() ?: json.optInt("port", 443)
                           val name = json.optString("ps", "VMess-$host").ifBlank { "VMess-$host" }
                           if (host.isBlank()) null else VpnConfig(
-                              name = name,
+                              name = name.take(36),
                               coreType = "Sing-box (Xray)",
                               protocol = "vmess",
                               host = host,
@@ -752,8 +746,7 @@ jobs:
               }
           """)
 
-          # 6. PingTester (Parallel Real TCP Handshake Latency Tester)
-          write_file("app/src/main/java/com/multivpn/app/sub/PingTester.kt", """
+          write_file("app/src/main/java/com/multivpn/app/sub/PingTester.kt", r"""
               package com.multivpn.app.sub
 
               import kotlinx.coroutines.Dispatchers
@@ -778,7 +771,7 @@ jobs:
                           val elapsed = System.currentTimeMillis() - start
                           if (elapsed <= 0L) 1L else elapsed
                       } catch (e: Exception) {
-                          -2L // Timeout or unreachable
+                          -2L
                       }
                   }
 
@@ -803,8 +796,7 @@ jobs:
               }
           """)
 
-          # 7. MainActivity & MultiCoreVpnService
-          write_file("app/src/main/java/com/multivpn/app/MainActivity.kt", """
+          write_file("app/src/main/java/com/multivpn/app/MainActivity.kt", r"""
               package com.multivpn.app
 
               import android.app.Activity
@@ -938,7 +930,6 @@ jobs:
                       }
                   }
 
-                  // دیالوگ تنظیم آدرس ساب‌لینک
                   if (showSubDialog) {
                       AlertDialog(
                           onDismissRequest = { showSubDialog = false },
@@ -972,7 +963,6 @@ jobs:
                       )
                   }
 
-                  // دیالوگ فعال‌سازی کد ۵ روزه
                   if (showLicenseDialog) {
                       AlertDialog(
                           onDismissRequest = {
@@ -1070,7 +1060,6 @@ jobs:
                       horizontalAlignment = Alignment.CenterHorizontally,
                       verticalArrangement = Arrangement.SpaceBetween
                   ) {
-                      // کارت وضعیت لایسنس بالا
                       Card(modifier = Modifier.fillMaxWidth()) {
                           Column(modifier = Modifier.padding(12.dp)) {
                               Row(
@@ -1097,7 +1086,6 @@ jobs:
                           }
                       }
 
-                      // دکمه بزرگ اتصال و وضعیت سرور
                       Column(horizontalAlignment = Alignment.CenterHorizontally) {
                           val isLicenseValid = licenseStatus is LicenseStatus.Valid
                           Button(
@@ -1145,7 +1133,6 @@ jobs:
                           }
                       }
 
-                      // لیست فشرده سرورها (قابل انتخاب با لمس)
                       Card(
                           modifier = Modifier
                               .fillMaxWidth()
@@ -1178,7 +1165,6 @@ jobs:
                           }
                       }
 
-                      // دکمه‌های کنترل پایین صفحه
                       Column(
                           modifier = Modifier.fillMaxWidth(),
                           verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1397,7 +1383,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if ! git diff --staged --quiet; then
-            git commit -m "Phase 3: Add DoH SubManager, Multi-protocol parser, and TCP PingTester [skip ci]"
+            git commit -m "Phase 3: Fix Kotlin escape sequences and build APK [skip ci]"
             git pull --rebase || true
             git push || true
           fi
