@@ -1,4 +1,4 @@
-name: Auto Build MultiCore VPN (Phase 3 - SubLink & Ping)
+name: Auto Build MultiCore VPN (Phase 3 - Clean UI & Config Selector)
 
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(cleaned + "\n")
 
-          print("Generating Phase 3 files (DoH, SubManager, PingTester, UI)...")
+          print("Generating Phase 3 files (Hardcoded Sub-Links, Config Selector, PingTester)...")
 
           write_file("gradle.properties", r"""
               org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
@@ -89,8 +89,8 @@ jobs:
                       applicationId = "com.multivpn.app"
                       minSdk = 24
                       targetSdk = 34
-                      versionCode = runNumber + 200
-                      versionName = "1.4.$runNumber"
+                      versionCode = runNumber + 300
+                      versionName = "1.5.$runNumber"
                   }
 
                   signingConfigs {
@@ -486,7 +486,7 @@ jobs:
                   suspend fun fetchUrlText(url: String): String = withContext(Dispatchers.IO) {
                       val req = Request.Builder()
                           .url(url)
-                          .header("User-Agent", "MultiCoreVPN/1.4 (Android; Sing-box; ClashMeta)")
+                          .header("User-Agent", "MultiCoreVPN/1.5 (Android; Sing-box; ClashMeta)")
                           .build()
 
                       try {
@@ -527,18 +527,12 @@ jobs:
               )
 
               object SubManager {
-                  private const val KEY_SUB_URL = "saved_sub_url"
                   private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-                  const val DEFAULT_SUB_URL = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
-
-                  fun getSubUrl(context: Context): String {
-                      return TimeGuard.getSecurePrefs(context).getString(KEY_SUB_URL, DEFAULT_SUB_URL) ?: DEFAULT_SUB_URL
-                  }
-
-                  fun setSubUrl(context: Context, url: String) {
-                      TimeGuard.getSecurePrefs(context).edit().putString(KEY_SUB_URL, url.trim()).apply()
-                  }
+                  // آدرس‌های ساب‌لینک مخفی شما (کاربر در برنامه قادر به دیدن یا تغییر آن‌ها نیست)
+                  private val SUBSCRIPTION_URLS = listOf(
+                      "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
+                  )
 
                   fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> {
                       val cached = TimeGuard.getSecurePrefs(context).getString(KEY_CACHED_RAW_SUB, null)
@@ -547,11 +541,21 @@ jobs:
                   }
 
                   suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
-                      val url = getSubUrl(context)
-                      val rawText = DohClient.fetchUrlText(url)
-                      val configs = parseRawSubscription(rawText)
+                      val combinedRaw = StringBuilder()
+                      for (url in SUBSCRIPTION_URLS) {
+                          try {
+                              val text = DohClient.fetchUrlText(url)
+                              combinedRaw.append(text).append("\n")
+                          } catch (_: Exception) {
+                          }
+                      }
+                      val finalRaw = combinedRaw.toString()
+                      if (finalRaw.isBlank()) {
+                          throw Exception("عدم دسترسی به سرور ساب‌لینک")
+                      }
+                      val configs = parseRawSubscription(finalRaw)
                       if (configs.isNotEmpty()) {
-                          TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, rawText).apply()
+                          TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, finalRaw).apply()
                       }
                       return if (configs.isNotEmpty()) configs else getBuiltInStarterConfigs()
                   }
@@ -871,8 +875,6 @@ jobs:
                   var isBusy by remember { mutableStateOf(false) }
                   var statusText by remember { mutableStateOf("آماده اتصال (${configs.size} کانفیگ آماده)") }
                   var expandCoreMenu by remember { mutableStateOf(false) }
-                  var showSubDialog by remember { mutableStateOf(false) }
-                  var subUrlInput by remember { mutableStateOf(SubManager.getSubUrl(context)) }
 
                   val cores = listOf(
                       "Auto (Smart)",
@@ -928,39 +930,6 @@ jobs:
                           }
                           delay(1000L)
                       }
-                  }
-
-                  if (showSubDialog) {
-                      AlertDialog(
-                          onDismissRequest = { showSubDialog = false },
-                          title = { Text("تنظیم آدرس ساب‌لینک ترکیبی", fontWeight = FontWeight.Bold) },
-                          text = {
-                              Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                  Text("لینک ساب‌اسکریپشن خود را وارد کنید (پشتیبانی از DoH ضد فیلتر):")
-                                  OutlinedTextField(
-                                      value = subUrlInput,
-                                      onValueChange = { subUrlInput = it },
-                                      label = { Text("https://...") },
-                                      singleLine = true,
-                                      modifier = Modifier.fillMaxWidth()
-                                  )
-                              }
-                          },
-                          confirmButton = {
-                              Button(onClick = {
-                                  SubManager.setSubUrl(context, subUrlInput)
-                                  showSubDialog = false
-                                  Toast.makeText(context, "آدرس ساب‌لینک ذخیره شد", Toast.LENGTH_SHORT).show()
-                              }) {
-                                  Text("ذخیره")
-                              }
-                          },
-                          dismissButton = {
-                              TextButton(onClick = { showSubDialog = false }) {
-                                  Text("انصراف")
-                              }
-                          }
-                      )
                   }
 
                   if (showLicenseDialog) {
@@ -1129,14 +1098,15 @@ jobs:
                                   best.pingMs == -2L -> "Timeout"
                                   else -> "تست نشده"
                               }
-                              Text(text = "سرور انتخابی: ${best.name} ($pingStr)")
+                              Text(text = "کانفیگ انتخابی: ${best.name} ($pingStr)")
                           }
                       }
 
+                      // لیست انتخاب کانفیگ
                       Card(
                           modifier = Modifier
                               .fillMaxWidth()
-                              .height(140.dp)
+                              .height(150.dp)
                       ) {
                           LazyColumn(modifier = Modifier.padding(8.dp)) {
                               items(filteredConfigs) { cfg ->
@@ -1165,6 +1135,7 @@ jobs:
                           }
                       }
 
+                      // دکمه‌های کنترل پایین صفحه (بدون دکمه وارد کردن دستی ساب‌لینک)
                       Column(
                           modifier = Modifier.fillMaxWidth(),
                           verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1174,7 +1145,7 @@ jobs:
                                   onClick = { expandCoreMenu = true },
                                   modifier = Modifier.fillMaxWidth()
                               ) {
-                                  Text("هسته فعال: $selectedCore (${filteredConfigs.size} سرور)")
+                                  Text("هسته فعال: $selectedCore (${filteredConfigs.size} کانفیگ)")
                               }
                               DropdownMenu(
                                   expanded = expandCoreMenu,
@@ -1196,7 +1167,7 @@ jobs:
                               onClick = {
                                   scope.launch {
                                       isBusy = true
-                                      statusText = "در حال تست پینگ موازی ${configs.size} سرور..."
+                                      statusText = "در حال تست پینگ موازی ${configs.size} کانفیگ..."
                                       val tested = PingTester.pingAllConfigs(configs)
                                       configs = tested
                                       val bestValid = tested.firstOrNull {
@@ -1204,7 +1175,7 @@ jobs:
                                       }
                                       if (bestValid != null) {
                                           selectedConfig = bestValid
-                                          statusText = "بهترین سرور: ${bestValid.name} (${bestValid.pingMs} ms)"
+                                          statusText = "سریع‌ترین کانفیگ: ${bestValid.name} (${bestValid.pingMs} ms)"
                                       } else {
                                           statusText = "تست پینگ تمام شد."
                                       }
@@ -1214,44 +1185,29 @@ jobs:
                               enabled = !isBusy,
                               modifier = Modifier.fillMaxWidth()
                           ) {
-                              Text("تست پینگ و انتخاب سریع‌ترین سرور")
+                              Text("تست پینگ")
                           }
 
-                          Row(
-                              modifier = Modifier.fillMaxWidth(),
-                              horizontalArrangement = Arrangement.spacedBy(8.dp)
-                          ) {
-                              OutlinedButton(
-                                  onClick = {
-                                      scope.launch {
-                                          isBusy = true
-                                          statusText = "دریافت ساب‌لینک با DoH ضد فیلتر..."
-                                          try {
-                                              val fetched = SubManager.fetchAndParseSub(context)
-                                              configs = fetched
-                                              selectedConfig = fetched.firstOrNull()
-                                              statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
-                                          } catch (e: Exception) {
-                                              statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
-                                          }
-                                          isBusy = false
+                          OutlinedButton(
+                              onClick = {
+                                  scope.launch {
+                                      isBusy = true
+                                      statusText = "در حال بروزرسانی ساب‌لینک‌ها با DoH..."
+                                      try {
+                                          val fetched = SubManager.fetchAndParseSub(context)
+                                          configs = fetched
+                                          selectedConfig = fetched.firstOrNull()
+                                          statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
+                                      } catch (e: Exception) {
+                                          statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
                                       }
-                                  },
-                                  enabled = !isBusy,
-                                  modifier = Modifier.weight(1f)
-                              ) {
-                                  Text("بروزرسانی ساب‌لینک")
-                              }
-
-                              OutlinedButton(
-                                  onClick = {
-                                      subUrlInput = SubManager.getSubUrl(context)
-                                      showSubDialog = true
-                                  },
-                                  enabled = !isBusy
-                              ) {
-                                  Text("آدرس ساب")
-                              }
+                                      isBusy = false
+                                  }
+                              },
+                              enabled = !isBusy,
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Text("بروزرسانی ساب‌لینک‌ها")
                           }
                       }
                   }
@@ -1383,7 +1339,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if ! git diff --staged --quiet; then
-            git commit -m "Phase 3: Fix Kotlin escape sequences and build APK [skip ci]"
+            git commit -m "Phase 3: Remove manual sub-link dialog and keep config selector [skip ci]"
             git pull --rebase || true
             git push || true
           fi
