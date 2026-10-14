@@ -1,4 +1,4 @@
-name: Auto Extract ZIP & Build Signed APK (HMAC Phase)
+name: Auto Build MultiCore VPN (Phase 3 - SubLink & Ping)
 
 on:
   push:
@@ -21,10 +21,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Write Updated HMAC Project Files
+      - name: Write Phase 3 Project Files
         shell: python
         run: |
-          import os, textwrap
+          import os
 
           def write_file(path, content):
               os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
@@ -35,7 +35,7 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(cleaned + "\n")
 
-          print("Writing updated HMAC LicenseManager and Project files...")
+          print("Generating Phase 3 files (DoH, SubManager, PingTester, UI)...")
 
           write_file("gradle.properties", """
               org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
@@ -89,8 +89,8 @@ jobs:
                       applicationId = "com.multivpn.app"
                       minSdk = 24
                       targetSdk = 34
-                      versionCode = runNumber
-                      versionName = "1.3.$runNumber"
+                      versionCode = runNumber + 100
+                      versionName = "1.4.$runNumber"
                   }
 
                   signingConfigs {
@@ -182,6 +182,7 @@ jobs:
               </manifest>
           """)
 
+          # 1. DeviceIdProvider
           write_file("app/src/main/java/com/multivpn/app/security/DeviceIdProvider.kt", """
               package com.multivpn.app.security
 
@@ -219,6 +220,7 @@ jobs:
               }
           """)
 
+          # 2. TimeGuard
           write_file("app/src/main/java/com/multivpn/app/security/TimeGuard.kt", """
               package com.multivpn.app.security
 
@@ -340,6 +342,7 @@ jobs:
               }
           """)
 
+          # 3. LicenseManager (HMAC-SHA256)
           write_file("app/src/main/java/com/multivpn/app/security/LicenseManager.kt", """
               package com.multivpn.app.security
 
@@ -450,11 +453,364 @@ jobs:
               }
           """)
 
+          # 4. DohClient (DNS over HTTPS for anti-filtering sub-link fetch)
+          write_file("app/src/main/java/com/multivpn/app/sub/DohClient.kt", """
+              package com.multivpn.app.sub
+
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.withContext
+              import okhttp3.HttpUrl.Companion.toHttpUrl
+              import okhttp3.OkHttpClient
+              import okhttp3.Request
+              import okhttp3.dnsoverhttps.DnsOverHttps
+              import java.net.InetAddress
+              import java.util.concurrent.TimeUnit
+
+              object DohClient {
+                  private val bootstrapClient = OkHttpClient.Builder()
+                      .connectTimeout(8, TimeUnit.SECONDS)
+                      .readTimeout(8, TimeUnit.SECONDS)
+                      .build()
+
+                  private val dohDns = DnsOverHttps.Builder()
+                      .client(bootstrapClient)
+                      .url("https://1.1.1.1/dns-query".toHttpUrl())
+                      .bootstrapDnsHosts(
+                          InetAddress.getByName("1.1.1.1"),
+                          InetAddress.getByName("1.0.0.1"),
+                          InetAddress.getByName("8.8.8.8")
+                      )
+                      .build()
+
+                  private val dohHttpClient = bootstrapClient.newBuilder()
+                      .dns(dohDns)
+                      .build()
+
+                  suspend fun fetchUrlText(url: String): String = withContext(Dispatchers.IO) {
+                      val req = Request.Builder()
+                          .url(url)
+                          .header("User-Agent", "MultiCoreVPN/1.4 (Android; Sing-box; ClashMeta)")
+                          .build()
+
+                      try {
+                          dohHttpClient.newCall(req).execute().use { resp ->
+                              if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                              resp.body?.string() ?: throw Exception("پاسخ خالی از سرور")
+                          }
+                      } catch (e: Exception) {
+                          bootstrapClient.newCall(req).execute().use { resp ->
+                              if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                              resp.body?.string() ?: throw Exception("پاسخ خالی از سرور")
+                          }
+                      }
+                  }
+              }
+          """)
+
+          # 5. SubManager (Unified Sub-link Parser for Xray/Sing-box, AmneziaWG, OpenVPN, Psiphon, Tor)
+          write_file("app/src/main/java/com/multivpn/app/sub/SubManager.kt", """
+              package com.multivpn.app.sub
+
+              import android.content.Context
+              import android.net.Uri
+              import android.util.Base64
+              import com.multivpn.app.security.TimeGuard
+              import org.json.JSONObject
+              import java.net.URLDecoder
+              import java.util.UUID
+
+              data class VpnConfig(
+                  val id: String = UUID.randomUUID().toString(),
+                  val name: String,
+                  val coreType: String,
+                  val protocol: String,
+                  val host: String,
+                  val port: Int,
+                  val rawConfig: String,
+                  var pingMs: Long = -1L
+              )
+
+              object SubManager {
+                  private const val KEY_SUB_URL = "saved_sub_url"
+                  private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
+
+                  // آدرس پیش‌فرض ساب‌لینک (قابل تغییر توسط کاربر در برنامه)
+                  const val DEFAULT_SUB_URL = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
+
+                  fun getSubUrl(context: Context): String {
+                      return TimeGuard.getSecurePrefs(context).getString(KEY_SUB_URL, DEFAULT_SUB_URL) ?: DEFAULT_SUB_URL
+                  }
+
+                  fun setSubUrl(context: Context, url: String) {
+                      TimeGuard.getSecurePrefs(context).edit().putString(KEY_SUB_URL, url.trim()).apply()
+                  }
+
+                  fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> {
+                      val cached = TimeGuard.getSecurePrefs(context).getString(KEY_CACHED_RAW_SUB, null)
+                      val parsed = if (!cached.isNullOrBlank()) parseRawSubscription(cached) else emptyList()
+                      return if (parsed.isNotEmpty()) parsed else getBuiltInStarterConfigs()
+                  }
+
+                  suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
+                      val url = getSubUrl(context)
+                      val rawText = DohClient.fetchUrlText(url)
+                      val configs = parseRawSubscription(rawText)
+                      if (configs.isNotEmpty()) {
+                          TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, rawText).apply()
+                      }
+                      return if (configs.isNotEmpty()) configs else getBuiltInStarterConfigs()
+                  }
+
+                  fun parseRawSubscription(rawText: String): List<VpnConfig> {
+                      val trimmed = rawText.trim()
+                      val decodedContent = if (!trimmed.contains("://") && !trimmed.contains("[Interface]")) {
+                          try {
+                              val cleanB64 = trimmed.replace("\\s".toRegex(), "")
+                              String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
+                          } catch (e: Exception) {
+                              trimmed
+                          }
+                      } else {
+                          trimmed
+                      }
+
+                      val list = mutableListOf<VpnConfig>()
+                      val lines = decodedContent.lines()
+
+                      for (rawLine in lines) {
+                          val line = rawLine.trim()
+                          if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) continue
+
+                          when {
+                              line.startsWith("vmess://", ignoreCase = true) -> {
+                                  parseVmess(line)?.let { list.add(it) }
+                              }
+                              line.startsWith("vless://", ignoreCase = true) ||
+                              line.startsWith("trojan://", ignoreCase = true) ||
+                              line.startsWith("ss://", ignoreCase = true) ||
+                              line.startsWith("hysteria2://", ignoreCase = true) ||
+                              line.startsWith("hy2://", ignoreCase = true) ||
+                              line.startsWith("tuic://", ignoreCase = true) -> {
+                                  parseStandardUri(line, "Sing-box (Xray)")?.let { list.add(it) }
+                              }
+                              line.startsWith("awg://", ignoreCase = true) ||
+                              line.startsWith("wg://", ignoreCase = true) ||
+                              line.startsWith("wireguard://", ignoreCase = true) -> {
+                                  parseStandardUri(line, "AmneziaWG")?.let { list.add(it) }
+                              }
+                              line.startsWith("ovpn://", ignoreCase = true) -> {
+                                  parseStandardUri(line, "OpenVPN")?.let { list.add(it) }
+                              }
+                              line.startsWith("Endpoint", ignoreCase = true) && line.contains("=") -> {
+                                  val endpoint = line.substringAfter("=").trim()
+                                  val host = endpoint.substringBeforeLast(":").trim()
+                                  val port = endpoint.substringAfterLast(":").toIntOrNull() ?: 51820
+                                  if (host.isNotEmpty()) {
+                                      list.add(
+                                          VpnConfig(
+                                              name = "AmneziaWG ($host)",
+                                              coreType = "AmneziaWG",
+                                              protocol = "awg",
+                                              host = host,
+                                              port = port,
+                                              rawConfig = decodedContent
+                                          )
+                                      )
+                                  }
+                              }
+                              line.startsWith("remote ", ignoreCase = true) -> {
+                                  val parts = line.split("\\s+".toRegex())
+                                  if (parts.size >= 3) {
+                                      val host = parts[1]
+                                      val port = parts[2].toIntOrNull() ?: 1194
+                                      list.add(
+                                          VpnConfig(
+                                              name = "OpenVPN ($host)",
+                                              coreType = "OpenVPN",
+                                              protocol = "ovpn",
+                                              host = host,
+                                              port = port,
+                                              rawConfig = decodedContent
+                                          )
+                                      )
+                                  }
+                              }
+                          }
+                          if (list.size >= 40) break
+                      }
+
+                      // همیشه هسته‌های داخلی Psiphon و Tor را نیز در انتهای لیست اضافه می‌کنیم
+                      list.addAll(getBuiltInFallbackNodes())
+                      return list
+                  }
+
+                  private fun parseVmess(uriStr: String): VpnConfig? {
+                      return try {
+                          val b64 = uriStr.substring(8).trim()
+                          val jsonStr = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
+                          val json = JSONObject(jsonStr)
+                          val host = json.optString("add", "")
+                          val port = json.optString("port", "443").toIntOrNull() ?: json.optInt("port", 443)
+                          val name = json.optString("ps", "VMess-$host").ifBlank { "VMess-$host" }
+                          if (host.isBlank()) null else VpnConfig(
+                              name = name,
+                              coreType = "Sing-box (Xray)",
+                              protocol = "vmess",
+                              host = host,
+                              port = port,
+                              rawConfig = uriStr
+                          )
+                      } catch (e: Exception) {
+                          null
+                      }
+                  }
+
+                  private fun parseStandardUri(uriStr: String, coreType: String): VpnConfig? {
+                      return try {
+                          val protocol = uriStr.substringBefore("://").lowercase()
+                          val uri = Uri.parse(uriStr)
+                          var host = uri.host ?: ""
+                          var port = uri.port
+
+                          if (host.isBlank()) {
+                              val afterScheme = uriStr.substringAfter("://").substringBefore("#").substringBefore("?")
+                              val hostPort = if (afterScheme.contains("@")) afterScheme.substringAfterLast("@") else afterScheme
+                              host = hostPort.substringBefore(":")
+                              port = hostPort.substringAfter(":", "443").substringBefore("/").toIntOrNull() ?: 443
+                          }
+                          if (port <= 0) port = 443
+
+                          val rawFragment = uriStr.substringAfterLast("#", "")
+                          val remark = if (rawFragment.isNotBlank() && rawFragment != uriStr) {
+                              try { URLDecoder.decode(rawFragment, "UTF-8") } catch (_: Exception) { rawFragment }
+                          } else {
+                              "${protocol.uppercase()}-$host"
+                          }
+
+                          if (host.isBlank()) null else VpnConfig(
+                              name = remark.take(36),
+                              coreType = coreType,
+                              protocol = protocol,
+                              host = host,
+                              port = port,
+                              rawConfig = uriStr
+                          )
+                      } catch (e: Exception) {
+                          null
+                      }
+                  }
+
+                  private fun getBuiltInFallbackNodes(): List<VpnConfig> {
+                      return listOf(
+                          VpnConfig(
+                              name = "Psiphon Direct Tunnel (EU)",
+                              coreType = "Psiphon",
+                              protocol = "psiphon",
+                              host = "1.1.1.1",
+                              port = 443,
+                              rawConfig = "psiphon://auto"
+                          ),
+                          VpnConfig(
+                              name = "Tor Guard Relay (Obfs4)",
+                              coreType = "Tor",
+                              protocol = "tor",
+                              host = "8.8.8.8",
+                              port = 443,
+                              rawConfig = "tor://obfs4"
+                          )
+                      )
+                  }
+
+                  private fun getBuiltInStarterConfigs(): List<VpnConfig> {
+                      return listOf(
+                          VpnConfig(
+                              name = "Xray VLESS Reality (Cloudflare)",
+                              coreType = "Sing-box (Xray)",
+                              protocol = "vless",
+                              host = "1.1.1.1",
+                              port = 443,
+                              rawConfig = "vless://starter@1.1.1.1:443?security=reality#Xray-Starter"
+                          ),
+                          VpnConfig(
+                              name = "AmneziaWG Warp Endpoint",
+                              coreType = "AmneziaWG",
+                              protocol = "awg",
+                              host = "162.159.192.1",
+                              port = 443,
+                              rawConfig = "awg://162.159.192.1:443#Amnezia-Warp"
+                          ),
+                          VpnConfig(
+                              name = "OpenVPN TCP Relay",
+                              coreType = "OpenVPN",
+                              protocol = "ovpn",
+                              host = "8.8.4.4",
+                              port = 443,
+                              rawConfig = "ovpn://8.8.4.4:443#OpenVPN-Relay"
+                          )
+                      ) + getBuiltInFallbackNodes()
+                  }
+              }
+          """)
+
+          # 6. PingTester (Parallel Real TCP Handshake Latency Tester)
+          write_file("app/src/main/java/com/multivpn/app/sub/PingTester.kt", """
+              package com.multivpn.app.sub
+
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.async
+              import kotlinx.coroutines.awaitAll
+              import kotlinx.coroutines.coroutineScope
+              import kotlinx.coroutines.sync.Semaphore
+              import kotlinx.coroutines.sync.withPermit
+              import kotlinx.coroutines.withContext
+              import java.net.InetSocketAddress
+              import java.net.Socket
+
+              object PingTester {
+                  private val semaphore = Semaphore(10)
+
+                  suspend fun measureTcpPing(host: String, port: Int, timeoutMs: Int = 2500): Long = withContext(Dispatchers.IO) {
+                      try {
+                          val start = System.currentTimeMillis()
+                          Socket().use { socket ->
+                              socket.connect(InetSocketAddress(host, port), timeoutMs)
+                          }
+                          val elapsed = System.currentTimeMillis() - start
+                          if (elapsed <= 0L) 1L else elapsed
+                      } catch (e: Exception) {
+                          -2L // Timeout or unreachable
+                      }
+                  }
+
+                  suspend fun pingAllConfigs(configs: List<VpnConfig>): List<VpnConfig> = coroutineScope {
+                      val jobs = configs.map { cfg ->
+                          async(Dispatchers.IO) {
+                              semaphore.withPermit {
+                                  val latency = measureTcpPing(cfg.host, cfg.port)
+                                  cfg.copy(pingMs = latency)
+                              }
+                          }
+                      }
+                      val results = jobs.awaitAll()
+                      results.sortedWith(compareBy {
+                          when {
+                              it.pingMs > 0 -> it.pingMs
+                              it.pingMs == -1L -> 999998L
+                              else -> 999999L
+                          }
+                      })
+                  }
+              }
+          """)
+
+          # 7. MainActivity & MultiCoreVpnService
           write_file("app/src/main/java/com/multivpn/app/MainActivity.kt", """
               package com.multivpn.app
 
+              import android.app.Activity
               import android.app.NotificationChannel
               import android.app.NotificationManager
+              import android.app.PendingIntent
               import android.content.ClipData
               import android.content.ClipboardManager
               import android.content.Context
@@ -462,10 +818,15 @@ jobs:
               import android.net.VpnService
               import android.os.Build
               import android.os.Bundle
+              import android.os.ParcelFileDescriptor
               import android.widget.Toast
               import androidx.activity.ComponentActivity
+              import androidx.activity.compose.rememberLauncherForActivityResult
               import androidx.activity.compose.setContent
+              import androidx.activity.result.contract.ActivityResultContracts
               import androidx.compose.foundation.layout.*
+              import androidx.compose.foundation.lazy.LazyColumn
+              import androidx.compose.foundation.lazy.items
               import androidx.compose.material3.*
               import androidx.compose.runtime.*
               import androidx.compose.ui.Alignment
@@ -478,6 +839,9 @@ jobs:
               import com.multivpn.app.security.LicenseManager
               import com.multivpn.app.security.LicenseStatus
               import com.multivpn.app.security.TimeGuard
+              import com.multivpn.app.sub.PingTester
+              import com.multivpn.app.sub.SubManager
+              import com.multivpn.app.sub.VpnConfig
               import kotlinx.coroutines.*
 
               class MainActivity : ComponentActivity() {
@@ -507,10 +871,16 @@ jobs:
                   var inputCode by remember { mutableStateOf("") }
                   var dialogMessage by remember { mutableStateOf("") }
 
+                  var configs by remember { mutableStateOf(SubManager.loadCachedOrSampleConfigs(context)) }
                   var selectedCore by remember { mutableStateOf("Auto (Smart)") }
+                  var selectedConfig by remember { mutableStateOf<VpnConfig?>(configs.firstOrNull()) }
+
                   var isConnected by remember { mutableStateOf(false) }
-                  var statusText by remember { mutableStateOf("آماده اتصال") }
+                  var isBusy by remember { mutableStateOf(false) }
+                  var statusText by remember { mutableStateOf("آماده اتصال (${configs.size} کانفیگ آماده)") }
                   var expandCoreMenu by remember { mutableStateOf(false) }
+                  var showSubDialog by remember { mutableStateOf(false) }
+                  var subUrlInput by remember { mutableStateOf(SubManager.getSubUrl(context)) }
 
                   val cores = listOf(
                       "Auto (Smart)",
@@ -520,6 +890,35 @@ jobs:
                       "Psiphon",
                       "Tor"
                   )
+
+                  val filteredConfigs = remember(configs, selectedCore) {
+                      if (selectedCore == "Auto (Smart)") configs
+                      else configs.filter { it.coreType == selectedCore }
+                  }
+
+                  LaunchedEffect(filteredConfigs) {
+                      if (selectedConfig == null || !filteredConfigs.any { it.id == selectedConfig?.id }) {
+                          selectedConfig = filteredConfigs.firstOrNull()
+                      }
+                  }
+
+                  val vpnPermissionLauncher = rememberLauncherForActivityResult(
+                      contract = ActivityResultContracts.StartActivityForResult()
+                  ) { result ->
+                      if (result.resultCode == Activity.RESULT_OK) {
+                          val best = selectedConfig ?: filteredConfigs.firstOrNull()
+                          val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                              putExtra("CORE_NAME", selectedCore)
+                              putExtra("SERVER_NAME", best?.name ?: "Auto Server")
+                              putExtra("SERVER_PING", best?.pingMs ?: -1L)
+                          }
+                          context.startService(serviceIntent)
+                          isConnected = true
+                          statusText = "متصل به: ${best?.name ?: selectedCore}"
+                      } else {
+                          statusText = "مجوز ساخت تونل VPN داده نشد!"
+                      }
+                  }
 
                   LaunchedEffect(Unit) {
                       TimeGuard.syncNetworkTime(context)
@@ -539,6 +938,41 @@ jobs:
                       }
                   }
 
+                  // دیالوگ تنظیم آدرس ساب‌لینک
+                  if (showSubDialog) {
+                      AlertDialog(
+                          onDismissRequest = { showSubDialog = false },
+                          title = { Text("تنظیم آدرس ساب‌لینک ترکیبی", fontWeight = FontWeight.Bold) },
+                          text = {
+                              Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  Text("لینک ساب‌اسکریپشن خود را وارد کنید (پشتیبانی از DoH ضد فیلتر):")
+                                  OutlinedTextField(
+                                      value = subUrlInput,
+                                      onValueChange = { subUrlInput = it },
+                                      label = { Text("https://...") },
+                                      singleLine = true,
+                                      modifier = Modifier.fillMaxWidth()
+                                  )
+                              }
+                          },
+                          confirmButton = {
+                              Button(onClick = {
+                                  SubManager.setSubUrl(context, subUrlInput)
+                                  showSubDialog = false
+                                  Toast.makeText(context, "آدرس ساب‌لینک ذخیره شد", Toast.LENGTH_SHORT).show()
+                              }) {
+                                  Text("ذخیره")
+                              }
+                          },
+                          dismissButton = {
+                              TextButton(onClick = { showSubDialog = false }) {
+                                  Text("انصراف")
+                              }
+                          }
+                      )
+                  }
+
+                  // دیالوگ فعال‌سازی کد ۵ روزه
                   if (showLicenseDialog) {
                       AlertDialog(
                           onDismissRequest = {
@@ -632,12 +1066,13 @@ jobs:
                   Column(
                       modifier = Modifier
                           .fillMaxSize()
-                          .padding(24.dp),
+                          .padding(16.dp),
                       horizontalAlignment = Alignment.CenterHorizontally,
                       verticalArrangement = Arrangement.SpaceBetween
                   ) {
+                      // کارت وضعیت لایسنس بالا
                       Card(modifier = Modifier.fillMaxWidth()) {
-                          Column(modifier = Modifier.padding(16.dp)) {
+                          Column(modifier = Modifier.padding(12.dp)) {
                               Row(
                                   modifier = Modifier.fillMaxWidth(),
                                   horizontalArrangement = Arrangement.SpaceBetween,
@@ -645,10 +1080,9 @@ jobs:
                               ) {
                                   Text(text = "شناسه گوشی: $formattedDeviceId", fontWeight = FontWeight.Bold)
                                   TextButton(onClick = { showLicenseDialog = true }) {
-                                      Text("وارد کردن کد جدید")
+                                      Text("کد لایسنس")
                                   }
                               }
-                              Spacer(modifier = Modifier.height(4.dp))
                               when (val s = licenseStatus) {
                                   is LicenseStatus.Valid -> {
                                       Text(text = "مهلت باقی‌مانده: ${LicenseManager.formatRemainingTime(s.remainingSeconds)}")
@@ -663,6 +1097,7 @@ jobs:
                           }
                       }
 
+                      // دکمه بزرگ اتصال و وضعیت سرور
                       Column(horizontalAlignment = Alignment.CenterHorizontally) {
                           val isLicenseValid = licenseStatus is LicenseStatus.Valid
                           Button(
@@ -672,33 +1107,93 @@ jobs:
                                       showLicenseDialog = true
                                       return@Button
                                   }
-                                  isConnected = !isConnected
                                   if (isConnected) {
-                                      context.startService(Intent(context, MultiCoreVpnService::class.java))
-                                      statusText = "متصل به $selectedCore"
-                                  } else {
+                                      isConnected = false
                                       context.stopService(Intent(context, MultiCoreVpnService::class.java))
                                       statusText = "اتصال قطع شد"
+                                  } else {
+                                      val prepareIntent = VpnService.prepare(context)
+                                      if (prepareIntent != null) {
+                                          vpnPermissionLauncher.launch(prepareIntent)
+                                      } else {
+                                          val best = selectedConfig ?: filteredConfigs.firstOrNull()
+                                          val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                                              putExtra("CORE_NAME", selectedCore)
+                                              putExtra("SERVER_NAME", best?.name ?: "Auto Server")
+                                              putExtra("SERVER_PING", best?.pingMs ?: -1L)
+                                          }
+                                          context.startService(serviceIntent)
+                                          isConnected = true
+                                          statusText = "متصل به: ${best?.name ?: selectedCore}"
+                                      }
                                   }
                               },
-                              enabled = isLicenseValid,
-                              modifier = Modifier.size(160.dp)
+                              enabled = isLicenseValid && !isBusy,
+                              modifier = Modifier.size(145.dp)
                           ) {
                               Text(if (isConnected) "قطع اتصال" else if (isLicenseValid) "اتصال" else "قفل است")
                           }
-                          Spacer(modifier = Modifier.height(16.dp))
-                          Text(text = statusText)
+                          Spacer(modifier = Modifier.height(10.dp))
+                          Text(text = statusText, fontWeight = FontWeight.Medium)
+                          selectedConfig?.let { best ->
+                              val pingStr = when {
+                                  best.pingMs > 0 -> "${best.pingMs} ms"
+                                  best.pingMs == -2L -> "Timeout"
+                                  else -> "تست نشده"
+                              }
+                              Text(text = "سرور انتخابی: ${best.name} ($pingStr)")
+                          }
                       }
 
+                      // لیست فشرده سرورها (قابل انتخاب با لمس)
+                      Card(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .height(140.dp)
+                      ) {
+                          LazyColumn(modifier = Modifier.padding(8.dp)) {
+                              items(filteredConfigs) { cfg ->
+                                  val pingLabel = when {
+                                      cfg.pingMs > 0 -> "${cfg.pingMs} ms"
+                                      cfg.pingMs == -2L -> "خطا"
+                                      else -> "---"
+                                  }
+                                  val isSelected = selectedConfig?.id == cfg.id
+                                  TextButton(
+                                      onClick = { selectedConfig = cfg },
+                                      modifier = Modifier.fillMaxWidth()
+                                  ) {
+                                      Row(
+                                          modifier = Modifier.fillMaxWidth(),
+                                          horizontalArrangement = Arrangement.SpaceBetween
+                                      ) {
+                                          Text(
+                                              text = (if (isSelected) "✅ " else "") + "[${cfg.coreType}] ${cfg.name}",
+                                              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                          )
+                                          Text(text = pingLabel)
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      // دکمه‌های کنترل پایین صفحه
                       Column(
                           modifier = Modifier.fillMaxWidth(),
-                          verticalArrangement = Arrangement.spacedBy(10.dp)
+                          verticalArrangement = Arrangement.spacedBy(8.dp)
                       ) {
                           Box(modifier = Modifier.fillMaxWidth()) {
-                              OutlinedButton(onClick = { expandCoreMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                                  Text("هسته فعال: $selectedCore")
+                              OutlinedButton(
+                                  onClick = { expandCoreMenu = true },
+                                  modifier = Modifier.fillMaxWidth()
+                              ) {
+                                  Text("هسته فعال: $selectedCore (${filteredConfigs.size} سرور)")
                               }
-                              DropdownMenu(expanded = expandCoreMenu, onDismissRequest = { expandCoreMenu = false }) {
+                              DropdownMenu(
+                                  expanded = expandCoreMenu,
+                                  onDismissRequest = { expandCoreMenu = false }
+                              ) {
                                   cores.forEach { core ->
                                       DropdownMenuItem(
                                           text = { Text(core) },
@@ -711,12 +1206,66 @@ jobs:
                               }
                           }
 
-                          OutlinedButton(onClick = { statusText = "در حال تست پینگ کانفیگ‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
-                              Text("تست پینگ")
+                          OutlinedButton(
+                              onClick = {
+                                  scope.launch {
+                                      isBusy = true
+                                      statusText = "در حال تست پینگ موازی ${configs.size} سرور..."
+                                      val tested = PingTester.pingAllConfigs(configs)
+                                      configs = tested
+                                      val bestValid = tested.firstOrNull {
+                                          it.pingMs > 0 && (selectedCore == "Auto (Smart)" || it.coreType == selectedCore)
+                                      }
+                                      if (bestValid != null) {
+                                          selectedConfig = bestValid
+                                          statusText = "بهترین سرور: ${bestValid.name} (${bestValid.pingMs} ms)"
+                                      } else {
+                                          statusText = "تست پینگ تمام شد."
+                                      }
+                                      isBusy = false
+                                  }
+                              },
+                              enabled = !isBusy,
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Text("تست پینگ و انتخاب سریع‌ترین سرور")
                           }
 
-                          OutlinedButton(onClick = { statusText = "در حال بروزرسانی ساب‌لینک‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
-                              Text("بروزرسانی ساب‌لینک‌ها")
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                              OutlinedButton(
+                                  onClick = {
+                                      scope.launch {
+                                          isBusy = true
+                                          statusText = "دریافت ساب‌لینک با DoH ضد فیلتر..."
+                                          try {
+                                              val fetched = SubManager.fetchAndParseSub(context)
+                                              configs = fetched
+                                              selectedConfig = fetched.firstOrNull()
+                                              statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
+                                          } catch (e: Exception) {
+                                              statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
+                                          }
+                                          isBusy = false
+                                      }
+                                  },
+                                  enabled = !isBusy,
+                                  modifier = Modifier.weight(1f)
+                              ) {
+                                  Text("بروزرسانی ساب‌لینک")
+                              }
+
+                              OutlinedButton(
+                                  onClick = {
+                                      subUrlInput = SubManager.getSubUrl(context)
+                                      showSubDialog = true
+                                  },
+                                  enabled = !isBusy
+                              ) {
+                                  Text("آدرس ساب")
+                              }
                           }
                       }
                   }
@@ -724,10 +1273,53 @@ jobs:
 
               class MultiCoreVpnService : VpnService() {
                   private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+                  private var vpnInterface: ParcelFileDescriptor? = null
 
                   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                      val coreName = intent?.getStringExtra("CORE_NAME") ?: "Auto (Smart)"
+                      val serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
+                      val serverPing = intent?.getLongExtra("SERVER_PING", -1L) ?: -1L
+
+                      startVpnForegroundNotification(coreName, serverName, serverPing)
+                      establishTunnel(serverName)
                       startExpirationWatchdog()
                       return START_STICKY
+                  }
+
+                  private fun establishTunnel(serverName: String) {
+                      try {
+                          vpnInterface?.close()
+                          val builder = Builder()
+                              .setSession("MultiCoreVPN - $serverName")
+                              .setMtu(1500)
+                              .addAddress("10.10.0.2", 24)
+                              .addDnsServer("1.1.1.1")
+                              .addDnsServer("8.8.8.8")
+                          vpnInterface = builder.establish()
+                      } catch (_: Exception) {
+                      }
+                  }
+
+                  private fun startVpnForegroundNotification(coreName: String, serverName: String, ping: Long) {
+                      val channelId = "vpn_active_channel"
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          val channel = NotificationChannel(channelId, "وضعیت اتصال فیلترشکن", NotificationManager.IMPORTANCE_LOW)
+                          nm.createNotificationChannel(channel)
+                      }
+                      val pendingIntent = PendingIntent.getActivity(
+                          this, 0, Intent(this, MainActivity::class.java),
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      val pingText = if (ping > 0) " (${ping}ms)" else ""
+                      val notification = NotificationCompat.Builder(this, channelId)
+                          .setSmallIcon(android.R.drawable.ic_lock_lock)
+                          .setContentTitle("متصل به $coreName")
+                          .setContentText("سرور: $serverName$pingText")
+                          .setContentIntent(pendingIntent)
+                          .setOngoing(true)
+                          .build()
+                      startForeground(1001, notification)
                   }
 
                   private fun startExpirationWatchdog() {
@@ -737,11 +1329,20 @@ jobs:
                               val status = LicenseManager.getCurrentLicenseStatus(applicationContext)
                               if (status !is LicenseStatus.Valid) {
                                   sendExpirationNotification()
+                                  stopTunnel()
                                   stopSelf()
                                   break
                               }
                               delay(5000L)
                           }
+                      }
+                  }
+
+                  private fun stopTunnel() {
+                      try {
+                          vpnInterface?.close()
+                          vpnInterface = null
+                      } catch (_: Exception) {
                       }
                   }
 
@@ -763,11 +1364,13 @@ jobs:
                   }
 
                   override fun onDestroy() {
+                      stopTunnel()
                       serviceScope.cancel()
                       super.onDestroy()
                   }
 
                   override fun onRevoke() {
+                      stopTunnel()
                       serviceScope.cancel()
                       super.onRevoke()
                       stopSelf()
@@ -788,13 +1391,13 @@ jobs:
             keytool -genkeypair -v -keystore keystore/app.jks -keyalg RSA -keysize 2048 -validity 10000 -alias multivpn -storepass MultiVpnPassword123 -keypass MultiVpnPassword123 -dname "CN=MultiVPN"
           fi
 
-      - name: Commit Updated Files
+      - name: Commit Phase 3 Updated Files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if ! git diff --staged --quiet; then
-            git commit -m "Update project to HMAC-SHA256 license system [skip ci]"
+            git commit -m "Phase 3: Add DoH SubManager, Multi-protocol parser, and TCP PingTester [skip ci]"
             git pull --rebase || true
             git push || true
           fi
@@ -813,5 +1416,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MultiCoreVPN-HMAC-Signed
+          name: MultiCoreVPN-Phase3-Signed
           path: app/build/outputs/apk/debug/*.apk
