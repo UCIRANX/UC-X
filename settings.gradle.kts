@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "MultiCoreVPN"
 include(":app")
+    
