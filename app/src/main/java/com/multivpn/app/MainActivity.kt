@@ -16,14 +16,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-  MaterialTheme {
-      Surface(
-modifier = Modifier.fillMaxSize(),
-color = MaterialTheme.colorScheme.background
-      ) {
-SinglePageVpnScreen()
-      }
-  }
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    SinglePageVpnScreen()
+                }
+            }
         }
     }
 }
@@ -46,73 +46,73 @@ fun SinglePageVpnScreen() {
 
     Column(
         modifier = Modifier
-  .fillMaxSize()
-  .padding(24.dp),
+            .fillMaxSize()
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
-  Column(modifier = Modifier.padding(16.dp)) {
-      Text(text = "شناسه دستگاه: در حال آماده‌سازی (فاز ۲)")
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(text = "اعتبار کد ۵ روزه: بررسی نشده")
-  }
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(text = "شناسه دستگاه: در حال آماده‌سازی (فاز ۲)")
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = "اعتبار کد ۵ روزه: بررسی نشده")
+            }
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-  Button(
-      onClick = {
-isConnected = !isConnected
-statusText = if (isConnected) "متصل به \$selectedCore" else "قطع شد"
-      },
-      modifier = Modifier.size(160.dp)
-  ) {
-      Text(if (isConnected) "قطع اتصال" else "اتصال")
-  }
-  Spacer(modifier = Modifier.height(16.dp))
-  Text(text = statusText)
+            Button(
+                onClick = {
+                    isConnected = !isConnected
+                    statusText = if (isConnected) "متصل به $selectedCore" else "قطع شد"
+                },
+                modifier = Modifier.size(160.dp)
+            ) {
+                Text(if (isConnected) "قطع اتصال" else "اتصال")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(text = statusText)
         }
 
         Column(
-  modifier = Modifier.fillMaxWidth(),
-  verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-  Box(modifier = Modifier.fillMaxWidth()) {
-      OutlinedButton(
-onClick = { expandCoreMenu = true },
-modifier = Modifier.fillMaxWidth()
-      ) {
-Text("هسته فعال: \$selectedCore")
-      }
-      DropdownMenu(
-expanded = expandCoreMenu,
-onDismissRequest = { expandCoreMenu = false }
-      ) {
-cores.forEach { core ->
-    DropdownMenuItem(
-        text = { Text(core) },
-        onClick = {
-  selectedCore = core
-  expandCoreMenu = false
-        }
-    )
-}
-      }
-  }
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { expandCoreMenu = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("هسته فعال: $selectedCore")
+                }
+                DropdownMenu(
+                    expanded = expandCoreMenu,
+                    onDismissRequest = { expandCoreMenu = false }
+                ) {
+                    cores.forEach { core ->
+                        DropdownMenuItem(
+                            text = { Text(core) },
+                            onClick = {
+                                selectedCore = core
+                                expandCoreMenu = false
+                            }
+                        )
+                    }
+                }
+            }
 
-  OutlinedButton(
-      onClick = { statusText = "در حال تست پینگ کانفیگ‌ها..." },
-      modifier = Modifier.fillMaxWidth()
-  ) {
-      Text("تست پینگ")
-  }
+            OutlinedButton(
+                onClick = { statusText = "در حال تست پینگ کانفیگ‌ها..." },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("تست پینگ")
+            }
 
-  OutlinedButton(
-      onClick = { statusText = "در حال دریافت کانفیگ‌ها از ساب‌لینک..." },
-      modifier = Modifier.fillMaxWidth()
-  ) {
-      Text("بروزرسانی ساب‌لینک‌ها")
-  }
+            OutlinedButton(
+                onClick = { statusText = "در حال دریافت کانفیگ‌ها از ساب‌لینک..." },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("بروزرسانی ساب‌لینک‌ها")
+            }
         }
     }
 }
