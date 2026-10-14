@@ -32,4 +32,3 @@ object DeviceIdProvider {
         return "${clean.substring(0, 4)}-${clean.substring(4, 8)}"
     }
 }
-    

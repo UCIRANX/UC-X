@@ -68,7 +68,6 @@ fun SinglePageVpnScreen() {
         "Tor"
     )
 
-    // همگام‌سازی زمان شبکه و شمارشگر معکوس ثانیه‌ای برای چک کردن مهلت ۵ روزه
     LaunchedEffect(Unit) {
         TimeGuard.syncNetworkTime(context)
         while (isActive) {
@@ -87,7 +86,6 @@ fun SinglePageVpnScreen() {
         }
     }
 
-    // پنجره قفل برنامه و دریافت کد ۵ روزه از ربات تلگرام
     if (showLicenseDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -121,10 +119,7 @@ fun SinglePageVpnScreen() {
                         ) {
                             Column {
                                 Text("شناسه دستگاه شما:")
-                                Text(
-                                    text = formattedDeviceId,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Text(text = formattedDeviceId, fontWeight = FontWeight.Bold)
                             }
                             Button(onClick = {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -139,16 +134,13 @@ fun SinglePageVpnScreen() {
                     OutlinedTextField(
                         value = inputCode,
                         onValueChange = { inputCode = it },
-                        label = { Text("کد دریافتی از ربات (MV1-...)") },
+                        label = { Text("کد دریافتی از ربات (MV2-...)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     if (dialogMessage.isNotBlank()) {
-                        Text(
-                            text = dialogMessage,
-                            color = MaterialTheme.colorScheme.error
-                        )
+                        Text(text = dialogMessage, color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
@@ -191,7 +183,6 @@ fun SinglePageVpnScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // کارت بالای صفحه: وضعیت لایسنس و شناسه دستگاه
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(
@@ -210,22 +201,15 @@ fun SinglePageVpnScreen() {
                         Text(text = "مهلت باقی‌مانده: ${LicenseManager.formatRemainingTime(s.remainingSeconds)}")
                     }
                     is LicenseStatus.Expired -> {
-                        Text(
-                            text = "وضعیت: مهلت ۵ روزه تمام شده است!",
-                            color = MaterialTheme.colorScheme.error
-                        )
+                        Text(text = "وضعیت: مهلت ۵ روزه تمام شده است!", color = MaterialTheme.colorScheme.error)
                     }
                     else -> {
-                        Text(
-                            text = "وضعیت: قفل (کد ۵ روزه وارد نشده)",
-                            color = MaterialTheme.colorScheme.error
-                        )
+                        Text(text = "وضعیت: قفل (کد ۵ روزه وارد نشده)", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
         }
 
-        // دکمه بزرگ اتصال (فقط در صورت معتبر بودن کد ۵ روزه کار می‌کند)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             val isLicenseValid = licenseStatus is LicenseStatus.Valid
             Button(
@@ -253,22 +237,15 @@ fun SinglePageVpnScreen() {
             Text(text = statusText)
         }
 
-        // ۴ دکمه کنترلی پایین صفحه
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    onClick = { expandCoreMenu = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                OutlinedButton(onClick = { expandCoreMenu = true }, modifier = Modifier.fillMaxWidth()) {
                     Text("هسته فعال: $selectedCore")
                 }
-                DropdownMenu(
-                    expanded = expandCoreMenu,
-                    onDismissRequest = { expandCoreMenu = false }
-                ) {
+                DropdownMenu(expanded = expandCoreMenu, onDismissRequest = { expandCoreMenu = false }) {
                     cores.forEach { core ->
                         DropdownMenuItem(
                             text = { Text(core) },
@@ -281,17 +258,11 @@ fun SinglePageVpnScreen() {
                 }
             }
 
-            OutlinedButton(
-                onClick = { statusText = "در حال تست پینگ کانفیگ‌ها (فاز ۳)..." },
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            OutlinedButton(onClick = { statusText = "در حال تست پینگ کانفیگ‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
                 Text("تست پینگ")
             }
 
-            OutlinedButton(
-                onClick = { statusText = "در حال بروزرسانی ساب‌لینک‌ها (فاز ۳)..." },
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            OutlinedButton(onClick = { statusText = "در حال بروزرسانی ساب‌لینک‌ها (فاز ۳)..." }, modifier = Modifier.fillMaxWidth()) {
                 Text("بروزرسانی ساب‌لینک‌ها")
             }
         }
@@ -325,11 +296,7 @@ class MultiCoreVpnService : VpnService() {
         val channelId = "vpn_expiry_alert"
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "هشدار انقضای کد ۵ روزه",
-                NotificationManager.IMPORTANCE_HIGH
-            )
+            val channel = NotificationChannel(channelId, "هشدار انقضای کد ۵ روزه", NotificationManager.IMPORTANCE_HIGH)
             nm.createNotificationChannel(channel)
         }
         val notification = NotificationCompat.Builder(this, channelId)
@@ -353,4 +320,3 @@ class MultiCoreVpnService : VpnService() {
         stopSelf()
     }
 }
-    

@@ -15,8 +15,6 @@ sealed class LicenseStatus {
 
 object LicenseManager {
     private const val KEY_SAVED_TOKEN = "saved_license_token"
-    
-    // همان کلید مخفی مشترک با کلودفلر (باید دقیقاً هماهنگ باشد)
     private const val SECRET_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
     private fun hexToBytes(hex: String): ByteArray {
@@ -59,7 +57,6 @@ object LicenseManager {
             return LicenseStatus.Invalid("فرمت کد وارد شده نامعتبر است.")
         }
 
-        // ساختار جدید: 16 بایت پِی‌لود + 32 بایت امضای HMAC = 48 بایت
         if (decoded.size != 48) {
             return LicenseStatus.Invalid("طول کد لایسنس صحیح نیست.")
         }

@@ -85,15 +85,8 @@ object TimeGuard {
         val maxSeen = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
         val currentWallSec = System.currentTimeMillis() / 1000L
 
-        // اگر ساعت شبکه را داریم، ساعت سیستم اهمیتی ندارد چون زمان دقیق را داریم
-        if (anchorNetworkEpochSec > 0L) {
-            return false
-        }
-
-        // اگر کاربر ساعت گوشی را بیش از ۵ دقیقه به عقب کشیده باشد
-        if (maxSeen > 0L && currentWallSec + 300L < maxSeen) {
-            return true
-        }
+        if (anchorNetworkEpochSec > 0L) return false
+        if (maxSeen > 0L && currentWallSec + 300L < maxSeen) return true
 
         updateMaxSeenTime(context, currentWallSec)
         return false
@@ -123,4 +116,3 @@ object TimeGuard {
         }
     }
 }
-    
