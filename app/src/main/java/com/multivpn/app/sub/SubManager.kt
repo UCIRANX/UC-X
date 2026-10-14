@@ -23,7 +23,6 @@ object SubManager {
     private const val KEY_SUB_URL = "saved_sub_url"
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    // آدرس پیش‌فرض ساب‌لینک (قابل تغییر توسط کاربر در برنامه)
     const val DEFAULT_SUB_URL = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
 
     fun getSubUrl(context: Context): String {
@@ -54,7 +53,7 @@ object SubManager {
         val trimmed = rawText.trim()
         val decodedContent = if (!trimmed.contains("://") && !trimmed.contains("[Interface]")) {
             try {
-                val cleanB64 = trimmed.replace("\s".toRegex(), "")
+                val cleanB64 = trimmed.filterNot { it.isWhitespace() }
                 String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
             } catch (e: Exception) {
                 trimmed
@@ -108,7 +107,7 @@ object SubManager {
                     }
                 }
                 line.startsWith("remote ", ignoreCase = true) -> {
-                    val parts = line.split("\s+".toRegex())
+                    val parts = line.split(' ', '\t').filter { it.isNotBlank() }
                     if (parts.size >= 3) {
                         val host = parts[1]
                         val port = parts[2].toIntOrNull() ?: 1194
@@ -128,7 +127,6 @@ object SubManager {
             if (list.size >= 40) break
         }
 
-        // همیشه هسته‌های داخلی Psiphon و Tor را نیز در انتهای لیست اضافه می‌کنیم
         list.addAll(getBuiltInFallbackNodes())
         return list
     }
@@ -142,7 +140,7 @@ object SubManager {
             val port = json.optString("port", "443").toIntOrNull() ?: json.optInt("port", 443)
             val name = json.optString("ps", "VMess-$host").ifBlank { "VMess-$host" }
             if (host.isBlank()) null else VpnConfig(
-                name = name,
+                name = name.take(36),
                 coreType = "Sing-box (Xray)",
                 protocol = "vmess",
                 host = host,

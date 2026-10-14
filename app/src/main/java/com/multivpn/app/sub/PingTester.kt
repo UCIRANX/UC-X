@@ -22,7 +22,7 @@ object PingTester {
             val elapsed = System.currentTimeMillis() - start
             if (elapsed <= 0L) 1L else elapsed
         } catch (e: Exception) {
-            -2L // Timeout or unreachable
+            -2L
         }
     }
 

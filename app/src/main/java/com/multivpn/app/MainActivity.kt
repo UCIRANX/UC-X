@@ -131,7 +131,6 @@ fun SinglePageVpnScreen() {
         }
     }
 
-    // دیالوگ تنظیم آدرس ساب‌لینک
     if (showSubDialog) {
         AlertDialog(
             onDismissRequest = { showSubDialog = false },
@@ -165,7 +164,6 @@ fun SinglePageVpnScreen() {
         )
     }
 
-    // دیالوگ فعال‌سازی کد ۵ روزه
     if (showLicenseDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -263,7 +261,6 @@ fun SinglePageVpnScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // کارت وضعیت لایسنس بالا
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Row(
@@ -290,7 +287,6 @@ fun SinglePageVpnScreen() {
             }
         }
 
-        // دکمه بزرگ اتصال و وضعیت سرور
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             val isLicenseValid = licenseStatus is LicenseStatus.Valid
             Button(
@@ -338,7 +334,6 @@ fun SinglePageVpnScreen() {
             }
         }
 
-        // لیست فشرده سرورها (قابل انتخاب با لمس)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -371,7 +366,6 @@ fun SinglePageVpnScreen() {
             }
         }
 
-        // دکمه‌های کنترل پایین صفحه
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
