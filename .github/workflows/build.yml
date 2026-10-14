@@ -182,7 +182,6 @@ jobs:
               </manifest>
           """)
 
-          # کلاس DeviceIdProvider
           write_file("app/src/main/java/com/multivpn/app/security/DeviceIdProvider.kt", """
               package com.multivpn.app.security
 
@@ -220,7 +219,6 @@ jobs:
               }
           """)
 
-          # کلاس TimeGuard
           write_file("app/src/main/java/com/multivpn/app/security/TimeGuard.kt", """
               package com.multivpn.app.security
 
@@ -342,7 +340,6 @@ jobs:
               }
           """)
 
-          # کلاس LicenseManager سازگار با HMAC-SHA256
           write_file("app/src/main/java/com/multivpn/app/security/LicenseManager.kt", """
               package com.multivpn.app.security
 
@@ -453,7 +450,6 @@ jobs:
               }
           """)
 
-          # فایل MainActivity
           write_file("app/src/main/java/com/multivpn/app/MainActivity.kt", """
               package com.multivpn.app
 
@@ -814,8 +810,6 @@ jobs:
       - name: Build Signed APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Upload Signed APK
-        export path: app/build/outputs/apk/debug/*.apk
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
