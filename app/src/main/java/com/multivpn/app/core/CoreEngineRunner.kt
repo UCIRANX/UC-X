@@ -67,7 +67,7 @@ object CoreEngineRunner {
             pb.redirectErrorStream(true)
             coreProcess = pb.start()
 
-            repeat(15) {
+            for (i in 0 until 15) {
                 delay(200L)
                 if (isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT)) {
                     return@withContext true

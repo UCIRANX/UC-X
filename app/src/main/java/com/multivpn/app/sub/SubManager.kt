@@ -21,7 +21,7 @@ data class VpnConfig(
 object SubManager {
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    // <<< آدرس ساب‌لینک خودت را اینجا بگذار >>>
+    // آدرس ساب‌لینک اختصاصی شما
     private val SUBSCRIPTION_URLS = listOf(
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
     )
