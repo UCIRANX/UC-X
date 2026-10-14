@@ -8,9 +8,11 @@
 
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:icon="@android:drawable/sym_def_app_icon"
         android:label="MultiCore VPN"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity

@@ -8,6 +8,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
+import com.multivpn.app.core.CoreConfigGenerator
+import com.multivpn.app.core.CoreEngineRunner
 import com.multivpn.app.security.DeviceIdProvider
 import com.multivpn.app.security.LicenseManager
 import com.multivpn.app.security.LicenseStatus
@@ -68,7 +71,7 @@ fun SinglePageVpnScreen() {
     var selectedCore by remember { mutableStateOf("Auto (Smart)") }
     var selectedConfig by remember { mutableStateOf<VpnConfig?>(configs.firstOrNull()) }
 
-    var isConnected by remember { mutableStateOf(false) }
+    var isConnected by remember { mutableStateOf(CoreEngineRunner.isCoreRunning()) }
     var isBusy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf("آماده اتصال (${configs.size} کانفیگ آماده)") }
     var expandCoreMenu by remember { mutableStateOf(false) }
@@ -93,19 +96,38 @@ fun SinglePageVpnScreen() {
         }
     }
 
+    fun connectToSelectedConfig() {
+        val best = selectedConfig ?: filteredConfigs.firstOrNull()
+        if (best == null) {
+            statusText = "هیچ کانفیگی برای اتصال وجود ندارد!"
+            return
+        }
+        scope.launch {
+            isBusy = true
+            statusText = "در حال روشن کردن هسته واقعی برای ${best.name}..."
+            val coreStarted = CoreEngineRunner.startCore(context, best)
+            if (coreStarted) {
+                val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                    putExtra("CORE_NAME", best.coreType)
+                    putExtra("SERVER_NAME", best.name)
+                    putExtra("SERVER_PING", best.pingMs)
+                }
+                context.startService(serviceIntent)
+                isConnected = true
+                statusText = "متصل شد (هسته فعال روی پورت ${CoreConfigGenerator.LOCAL_SOCKS_PORT})"
+            } else {
+                isConnected = false
+                statusText = CoreEngineRunner.lastErrorLog.ifBlank { "خطا در راه‌اندازی هسته!" }
+            }
+            isBusy = false
+        }
+    }
+
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            val best = selectedConfig ?: filteredConfigs.firstOrNull()
-            val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
-                putExtra("CORE_NAME", selectedCore)
-                putExtra("SERVER_NAME", best?.name ?: "Auto Server")
-                putExtra("SERVER_PING", best?.pingMs ?: -1L)
-            }
-            context.startService(serviceIntent)
-            isConnected = true
-            statusText = "متصل به: ${best?.name ?: selectedCore}"
+            connectToSelectedConfig()
         } else {
             statusText = "مجوز ساخت تونل VPN داده نشد!"
         }
@@ -120,6 +142,7 @@ fun SinglePageVpnScreen() {
             if (current !is LicenseStatus.Valid) {
                 if (isConnected) {
                     isConnected = false
+                    CoreEngineRunner.stopCore()
                     context.stopService(Intent(context, MultiCoreVpnService::class.java))
                     statusText = "قطع خودکار: مهلت ۵ روزه به پایان رسید!"
                 }
@@ -263,31 +286,24 @@ fun SinglePageVpnScreen() {
                     }
                     if (isConnected) {
                         isConnected = false
+                        CoreEngineRunner.stopCore()
                         context.stopService(Intent(context, MultiCoreVpnService::class.java))
-                        statusText = "اتصال قطع شد"
+                        statusText = "اتصال و هسته کامل قطع شد"
                     } else {
                         val prepareIntent = VpnService.prepare(context)
                         if (prepareIntent != null) {
                             vpnPermissionLauncher.launch(prepareIntent)
                         } else {
-                            val best = selectedConfig ?: filteredConfigs.firstOrNull()
-                            val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
-                                putExtra("CORE_NAME", selectedCore)
-                                putExtra("SERVER_NAME", best?.name ?: "Auto Server")
-                                putExtra("SERVER_PING", best?.pingMs ?: -1L)
-                            }
-                            context.startService(serviceIntent)
-                            isConnected = true
-                            statusText = "متصل به: ${best?.name ?: selectedCore}"
+                            connectToSelectedConfig()
                         }
                     }
                 },
                 enabled = isLicenseValid && !isBusy,
-                modifier = Modifier.size(145.dp)
+                modifier = Modifier.size(135.dp)
             ) {
                 Text(if (isConnected) "قطع اتصال" else if (isLicenseValid) "اتصال" else "قفل است")
             }
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(text = statusText, fontWeight = FontWeight.Medium)
             selectedConfig?.let { best ->
                 val pingStr = when {
@@ -297,13 +313,29 @@ fun SinglePageVpnScreen() {
                 }
                 Text(text = "کانفیگ انتخابی: ${best.name} ($pingStr)")
             }
+            if (isConnected) {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            statusText = "در حال تست اینترنت واقعی از داخل تونل..."
+                            val delayMs = CoreEngineRunner.measureRealTunnelDelay()
+                            statusText = if (delayMs > 0) {
+                                "✅ تونل واقعی متصل است! (پینگ خروجی: $delayMs ms)"
+                            } else {
+                                "⚠️ هسته روشن است اما این کانفیگ اینترنت ندارد (کانفیگ دیگری انتخاب کنید)"
+                            }
+                        }
+                    }
+                ) {
+                    Text("تست اینترنت واقعی تونل")
+                }
+            }
         }
 
-        // لیست انتخاب کانفیگ
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(150.dp)
+                .height(145.dp)
         ) {
             LazyColumn(modifier = Modifier.padding(8.dp)) {
                 items(filteredConfigs) { cfg ->
@@ -314,7 +346,12 @@ fun SinglePageVpnScreen() {
                     }
                     val isSelected = selectedConfig?.id == cfg.id
                     TextButton(
-                        onClick = { selectedConfig = cfg },
+                        onClick = {
+                            selectedConfig = cfg
+                            if (isConnected) {
+                                connectToSelectedConfig()
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -332,7 +369,6 @@ fun SinglePageVpnScreen() {
             }
         }
 
-        // دکمه‌های کنترل پایین صفحه (بدون دکمه وارد کردن دستی ساب‌لینک)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -389,7 +425,7 @@ fun SinglePageVpnScreen() {
                 onClick = {
                     scope.launch {
                         isBusy = true
-                        statusText = "در حال بروزرسانی ساب‌لینک‌ها با DoH..."
+                        statusText = "دریافت ساب‌لینک‌ها با DoH..."
                         try {
                             val fetched = SubManager.fetchAndParseSub(context)
                             configs = fetched
@@ -434,6 +470,20 @@ class MultiCoreVpnService : VpnService() {
                 .addAddress("10.10.0.2", 24)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
+
+            // جلوگیری از لوپ شدن ترافیک خود هسته Xray داخل تونل VPN
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (_: Exception) {
+            }
+
+            // تنظیم پروکسی سطح سیستم روی پورت لوکال هسته Xray (اندروید ۱۰ به بالا)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setHttpProxy(
+                    ProxyInfo.buildDirectProxy("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT)
+                )
+            }
+
             vpnInterface = builder.establish()
         } catch (_: Exception) {
         }
@@ -479,6 +529,7 @@ class MultiCoreVpnService : VpnService() {
 
     private fun stopTunnel() {
         try {
+            CoreEngineRunner.stopCore()
             vpnInterface?.close()
             vpnInterface = null
         } catch (_: Exception) {

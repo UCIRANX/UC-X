@@ -22,9 +22,8 @@ data class VpnConfig(
 object SubManager {
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    // آدرس‌های ساب‌لینک مخفی شما (کاربر در برنامه قادر به دیدن یا تغییر آن‌ها نیست)
     private val SUBSCRIPTION_URLS = listOf(
-        "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
     )
 
     fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> {
@@ -128,7 +127,7 @@ object SubManager {
                     }
                 }
             }
-            if (list.size >= 40) break
+            if (list.size >= 50) break
         }
 
         list.addAll(getBuiltInFallbackNodes())
@@ -194,7 +193,7 @@ object SubManager {
     private fun getBuiltInFallbackNodes(): List<VpnConfig> {
         return listOf(
             VpnConfig(
-                name = "Psiphon Direct Tunnel (EU)",
+                name = "Psiphon Anti-DPI Bridge",
                 coreType = "Psiphon",
                 protocol = "psiphon",
                 host = "1.1.1.1",
@@ -215,12 +214,12 @@ object SubManager {
     private fun getBuiltInStarterConfigs(): List<VpnConfig> {
         return listOf(
             VpnConfig(
-                name = "Xray VLESS Reality (Cloudflare)",
+                name = "Xray TLS Fragment (Direct Anti-DPI)",
                 coreType = "Sing-box (Xray)",
-                protocol = "vless",
+                protocol = "fragment",
                 host = "1.1.1.1",
                 port = 443,
-                rawConfig = "vless://starter@1.1.1.1:443?security=reality#Xray-Starter"
+                rawConfig = "fragment://1.1.1.1:443#TLS-Fragment"
             ),
             VpnConfig(
                 name = "AmneziaWG Warp Endpoint",

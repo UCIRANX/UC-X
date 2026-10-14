@@ -14,8 +14,12 @@ android {
         applicationId = "com.multivpn.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = runNumber + 300
-        versionName = "1.5.$runNumber"
+        versionCode = runNumber + 500
+        versionName = "2.0.$runNumber"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {
@@ -34,6 +38,12 @@ android {
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("permanentSign")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 
