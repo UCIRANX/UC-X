@@ -21,15 +21,18 @@ data class VpnConfig(
 object SubManager {
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    // آدرس ساب‌لینک خودت را اینجا بگذار
+    // آدرس ساب‌لینک خودت را اینجا قرار بده
     private val SUBSCRIPTION_URLS = listOf(
-        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
+        "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
     )
 
     fun loadCachedConfigs(context: Context): List<VpnConfig> {
         val cached = TimeGuard.getSecurePrefs(context).getString(KEY_CACHED_RAW_SUB, null)
         return if (!cached.isNullOrBlank()) parseRawSubscription(cached) else emptyList()
     }
+
+    // نگه‌داشتن نام قبلی تابع برای جلوگیری از هرگونه خطای کامپایل در MainActivity
+    fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> = loadCachedConfigs(context)
 
     suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
         val combinedRaw = StringBuilder()
@@ -55,11 +58,12 @@ object SubManager {
         val trimmed = rawText.trim()
         if (trimmed.contains("://")) return trimmed
         val cleanB64 = trimmed.filterNot { it.isWhitespace() }
+        val padded = cleanB64.padEnd((cleanB64.length + 3) / 4 * 4, '=')
         return try {
-            String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
+            String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
         } catch (_: Exception) {
             try {
-                String(Base64.decode(cleanB64, Base64.URL_SAFE), Charsets.UTF_8)
+                String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
             } catch (_: Exception) {
                 trimmed
             }
@@ -117,7 +121,6 @@ object SubManager {
             val port: Int
 
             if (hostPortPart.startsWith("[")) {
-                // IPv6
                 host = hostPortPart.substringBefore("]") + "]"
                 port = hostPortPart.substringAfter("]:", "443").toIntOrNull() ?: 443
             } else {
@@ -153,8 +156,7 @@ object SubManager {
             val hostPortPart = if (mainPart.contains("@")) {
                 mainPart.substringAfterLast("@").substringBefore("/")
             } else {
-                // فرمت کاملاً Base64 شده: ss://BASE64(method:pass@host:port)#remark
-                val b64 = mainPart.substringBefore("/").trim()
+                val b64 = try { URLDecoder.decode(mainPart.substringBefore("/").trim(), "UTF-8") } catch (_: Exception) { mainPart.substringBefore("/").trim() }
                 val padded = b64.padEnd((b64.length + 3) / 4 * 4, '=')
                 val decoded = try {
                     String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
@@ -185,10 +187,11 @@ object SubManager {
     private fun parseVmess(uriStr: String): VpnConfig? {
         return try {
             val b64 = uriStr.substringAfter("://").trim()
+            val padded = b64.padEnd((b64.length + 3) / 4 * 4, '=')
             val jsonStr = try {
-                String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
+                String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
             } catch (_: Exception) {
-                String(Base64.decode(b64, Base64.URL_SAFE), Charsets.UTF_8)
+                String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
             }
             val json = JSONObject(jsonStr)
             val host = json.optString("add", "").trim()
