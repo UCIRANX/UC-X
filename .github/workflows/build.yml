@@ -1,4 +1,4 @@
-name: Build Clean MultiCore VPN
+name: Auto Fix & Build MultiCore VPN
 
 on:
   push:
@@ -21,6 +21,1846 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Sync All Project Files Automatically
+        shell: python
+        run: |
+          import os, shutil
+
+          # حذف پوشه اضافی ربات پایتون قدیمی
+          if os.path.exists("telegram_bot"):
+              shutil.rmtree("telegram_bot")
+
+          def write_file(path, content):
+              os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+              lines = content.strip("\n").split("\n")
+              non_empty = [l for l in lines if l.strip()]
+              min_indent = min((len(l) - len(l.lstrip())) for l in non_empty) if non_empty else 0
+              cleaned = "\n".join(l[min_indent:] if len(l) >= min_indent else l for l in lines)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(cleaned + "\n")
+
+          write_file("gradle.properties", r"""
+              org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+              android.useAndroidX=true
+              kotlin.code.style=official
+              android.nonTransitiveRClass=true
+          """)
+
+          write_file("settings.gradle.kts", r"""
+              pluginManagement {
+                  repositories {
+                      google()
+                      mavenCentral()
+                      gradlePluginPortal()
+                  }
+              }
+              dependencyResolutionManagement {
+                  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+                  repositories {
+                      google()
+                      mavenCentral()
+                      maven { url = uri("https://jitpack.io") }
+                  }
+              }
+              rootProject.name = "MultiCoreVPN"
+              include(":app")
+          """)
+
+          write_file("build.gradle.kts", r"""
+              plugins {
+                  id("com.android.application") version "8.5.2" apply false
+                  id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+                  id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+              }
+          """)
+
+          write_file("app/build.gradle.kts", r"""
+              plugins {
+                  id("com.android.application")
+                  id("org.jetbrains.kotlin.android")
+                  id("org.jetbrains.kotlin.plugin.compose")
+              }
+
+              val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+
+              android {
+                  namespace = "com.multivpn.app"
+                  compileSdk = 34
+
+                  defaultConfig {
+                      applicationId = "com.multivpn.app"
+                      minSdk = 24
+                      targetSdk = 34
+                      versionCode = runNumber + 700
+                      versionName = "2.2.$runNumber"
+
+                      ndk {
+                          abiFilters += listOf("arm64-v8a")
+                      }
+                  }
+
+                  signingConfigs {
+                      create("permanentSign") {
+                          storeFile = rootProject.file("keystore/app.jks")
+                          storePassword = "MultiVpnPassword123"
+                          keyAlias = "multivpn"
+                          keyPassword = "MultiVpnPassword123"
+                      }
+                  }
+
+                  buildTypes {
+                      debug {
+                          signingConfig = signingConfigs.getByName("permanentSign")
+                      }
+                      release {
+                          isMinifyEnabled = false
+                          signingConfig = signingConfigs.getByName("permanentSign")
+                      }
+                  }
+
+                  packaging {
+                      jniLibs {
+                          useLegacyPackaging = true
+                      }
+                  }
+
+                  compileOptions {
+                      sourceCompatibility = JavaVersion.VERSION_17
+                      targetCompatibility = JavaVersion.VERSION_17
+                  }
+
+                  kotlinOptions {
+                      jvmTarget = "17"
+                  }
+
+                  buildFeatures {
+                      compose = true
+                  }
+              }
+
+              dependencies {
+                  val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+                  implementation(composeBom)
+                  implementation("androidx.activity:activity-compose:1.9.0")
+                  implementation("androidx.compose.ui:ui")
+                  implementation("androidx.compose.foundation:foundation")
+                  implementation("androidx.compose.material3:material3")
+                  implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+                  implementation("androidx.core:core-ktx:1.13.1")
+                  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+                  implementation("com.squareup.okhttp3:okhttp:4.12.0")
+                  implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
+                  implementation("androidx.security:security-crypto:1.1.0-alpha06")
+              }
+          """)
+
+          write_file("app/src/main/AndroidManifest.xml", r"""
+              <?xml version="1.0" encoding="utf-8"?>
+              <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                  <uses-permission android:name="android.permission.INTERNET" />
+                  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+                  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+                  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+                  <application
+                      android:allowBackup="false"
+                      android:extractNativeLibs="true"
+                      android:icon="@android:drawable/sym_def_app_icon"
+                      android:label="MultiCore VPN"
+                      android:supportsRtl="true"
+                      android:usesCleartextTraffic="true"
+                      android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                      <activity
+                          android:name=".MainActivity"
+                          android:exported="true">
+                          <intent-filter>
+                              <action android:name="android.intent.action.MAIN" />
+                              <category android:name="android.intent.category.LAUNCHER" />
+                          </intent-filter>
+                      </activity>
+
+                      <service
+                          android:name=".MultiCoreVpnService"
+                          android:exported="false"
+                          android:permission="android.permission.BIND_VPN_SERVICE"
+                          android:foregroundServiceType="specialUse">
+                          <intent-filter>
+                              <action android:name="android.net.VpnService" />
+                          </intent-filter>
+                          <property
+                              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                              android:value="vpn" />
+                      </service>
+                  </application>
+              </manifest>
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/security/DeviceIdProvider.kt", r"""
+              package com.multivpn.app.security
+
+              import android.annotation.SuppressLint
+              import android.content.Context
+              import android.os.Build
+              import android.provider.Settings
+              import java.security.MessageDigest
+
+              object DeviceIdProvider {
+                  private const val ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+                  @SuppressLint("HardwareIds")
+                  fun getCleanDeviceId(context: Context): String {
+                      val androidId = Settings.Secure.getString(
+                          context.contentResolver,
+                          Settings.Secure.ANDROID_ID
+                      ) ?: "unknown_id"
+
+                      val rawFingerprint = "$androidId-${Build.BOARD}-${Build.BRAND}-${Build.DEVICE}-${Build.HARDWARE}"
+                      val digest = MessageDigest.getInstance("SHA-256").digest(rawFingerprint.toByteArray(Charsets.UTF_8))
+
+                      val sb = StringBuilder(8)
+                      for (i in 0 until 8) {
+                          val index = (digest[i].toInt() and 0xFF) % ALPHABET.length
+                          sb.append(ALPHABET[index])
+                      }
+                      return sb.toString()
+                  }
+
+                  fun getFormattedDeviceId(context: Context): String {
+                      val clean = getCleanDeviceId(context)
+                      return "${clean.substring(0, 4)}-${clean.substring(4, 8)}"
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/security/TimeGuard.kt", r"""
+              package com.multivpn.app.security
+
+              import android.content.Context
+              import android.content.SharedPreferences
+              import android.os.SystemClock
+              import androidx.security.crypto.EncryptedSharedPreferences
+              import androidx.security.crypto.MasterKey
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.withContext
+              import okhttp3.OkHttpClient
+              import okhttp3.Request
+              import java.text.SimpleDateFormat
+              import java.util.Locale
+              import java.util.concurrent.TimeUnit
+              import kotlin.math.max
+
+              object TimeGuard {
+                  private const val PREF_FILE = "secure_time_prefs"
+                  private const val KEY_MAX_SEEN_EPOCH = "max_seen_epoch_sec"
+
+                  @Volatile
+                  private var anchorNetworkEpochSec: Long = 0L
+
+                  @Volatile
+                  private var anchorElapsedRealtimeSec: Long = 0L
+
+                  private val httpClient = OkHttpClient.Builder()
+                      .connectTimeout(4, TimeUnit.SECONDS)
+                      .readTimeout(4, TimeUnit.SECONDS)
+                      .followRedirects(false)
+                      .build()
+
+                  private val timeUrls = listOf(
+                      "https://www.digikala.com",
+                      "https://www.aparat.com",
+                      "http://cp.cloudflare.com/generate_204",
+                      "https://www.google.com"
+                  )
+
+                  fun getSecurePrefs(context: Context): SharedPreferences {
+                      return try {
+                          val masterKey = MasterKey.Builder(context)
+                              .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                              .build()
+                          EncryptedSharedPreferences.create(
+                              context,
+                              PREF_FILE,
+                              masterKey,
+                              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                          )
+                      } catch (e: Exception) {
+                          context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+                      }
+                  }
+
+                  suspend fun syncNetworkTime(context: Context): Boolean = withContext(Dispatchers.IO) {
+                      for (url in timeUrls) {
+                          try {
+                              val request = Request.Builder().url(url).head().build()
+                              httpClient.newCall(request).execute().use { response ->
+                                  val dateHeader = response.header("Date")
+                                  if (!dateHeader.isNullOrBlank()) {
+                                      val sdf = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
+                                      val parsedDate = sdf.parse(dateHeader)
+                                      if (parsedDate != null) {
+                                          val serverSec = parsedDate.time / 1000L
+                                          if (serverSec > 1700000000L) {
+                                              anchorNetworkEpochSec = serverSec
+                                              anchorElapsedRealtimeSec = SystemClock.elapsedRealtime() / 1000L
+                                              updateMaxSeenTime(context, serverSec)
+                                              return@withContext true
+                                          }
+                                      }
+                                  }
+                              }
+                          } catch (_: Exception) {
+                          }
+                      }
+                      false
+                  }
+
+                  fun isClockTampered(context: Context): Boolean {
+                      val prefs = getSecurePrefs(context)
+                      val maxSeen = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
+                      val currentWallSec = System.currentTimeMillis() / 1000L
+
+                      if (anchorNetworkEpochSec > 0L) return false
+                      if (maxSeen > 0L && currentWallSec + 300L < maxSeen) return true
+
+                      updateMaxSeenTime(context, currentWallSec)
+                      return false
+                  }
+
+                  fun getCurrentVerifiedTimeSec(context: Context): Long {
+                      val nowElapsedSec = SystemClock.elapsedRealtime() / 1000L
+                      val currentWallSec = System.currentTimeMillis() / 1000L
+                      val prefs = getSecurePrefs(context)
+                      val maxSeen = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
+
+                      val estimatedSec = if (anchorNetworkEpochSec > 0L) {
+                          anchorNetworkEpochSec + (nowElapsedSec - anchorElapsedRealtimeSec)
+                      } else {
+                          max(currentWallSec, maxSeen)
+                      }
+
+                      updateMaxSeenTime(context, estimatedSec)
+                      return estimatedSec
+                  }
+
+                  private fun updateMaxSeenTime(context: Context, newTimeSec: Long) {
+                      val prefs = getSecurePrefs(context)
+                      val currentMax = prefs.getLong(KEY_MAX_SEEN_EPOCH, 0L)
+                      if (newTimeSec > currentMax) {
+                          prefs.edit().putLong(KEY_MAX_SEEN_EPOCH, newTimeSec).apply()
+                      }
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/security/LicenseManager.kt", r"""
+              package com.multivpn.app.security
+
+              import android.content.Context
+              import android.util.Base64
+              import java.nio.ByteBuffer
+              import javax.crypto.Mac
+              import javax.crypto.spec.SecretKeySpec
+
+              sealed class LicenseStatus {
+                  data class Valid(val remainingSeconds: Long, val expiryEpochSec: Long) : LicenseStatus()
+                  data class Expired(val message: String) : LicenseStatus()
+                  data class Invalid(val reason: String) : LicenseStatus()
+                  object Missing : LicenseStatus()
+              }
+
+              object LicenseManager {
+                  private const val KEY_SAVED_TOKEN = "saved_license_token"
+                  private const val SECRET_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+                  private fun hexToBytes(hex: String): ByteArray {
+                      val len = hex.length
+                      val data = ByteArray(len / 2)
+                      var i = 0
+                      while (i < len) {
+                          data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+                          i += 2
+                      }
+                      return data
+                  }
+
+                  fun verifyAndSaveToken(context: Context, rawInput: String): LicenseStatus {
+                      val status = verifyTokenInternal(context, rawInput)
+                      if (status is LicenseStatus.Valid) {
+                          TimeGuard.getSecurePrefs(context)
+                              .edit()
+                              .putString(KEY_SAVED_TOKEN, rawInput.trim())
+                              .apply()
+                      }
+                      return status
+                  }
+
+                  fun getCurrentLicenseStatus(context: Context): LicenseStatus {
+                      val saved = TimeGuard.getSecurePrefs(context).getString(KEY_SAVED_TOKEN, null)
+                      if (saved.isNullOrBlank()) return LicenseStatus.Missing
+                      return verifyTokenInternal(context, saved)
+                  }
+
+                  private fun verifyTokenInternal(context: Context, rawInput: String): LicenseStatus {
+                      if (TimeGuard.isClockTampered(context)) {
+                          return LicenseStatus.Invalid("ساعت گوشی به عقب کشیده شده است! لطفاً تاریخ و ساعت گوشی را به حالت خودکار برگردانید.")
+                      }
+
+                      val cleaned = rawInput.trim().removePrefix("MV2-").removePrefix("mv2-").removePrefix("MV1-").removePrefix("mv1-")
+                      val decoded: ByteArray = try {
+                          Base64.decode(cleaned, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                      } catch (e: Exception) {
+                          return LicenseStatus.Invalid("فرمت کد وارد شده نامعتبر است.")
+                      }
+
+                      if (decoded.size != 48) {
+                          return LicenseStatus.Invalid("طول کد لایسنس صحیح نیست.")
+                      }
+
+                      val payload = decoded.copyOfRange(0, 16)
+                      val signature = decoded.copyOfRange(16, 48)
+
+                      val isSignatureValid = try {
+                          val secretBytes = hexToBytes(SECRET_KEY_HEX)
+                          val mac = Mac.getInstance("HmacSHA256")
+                          mac.init(SecretKeySpec(secretBytes, "HmacSHA256"))
+                          val computedSig = mac.doFinal(payload)
+                          computedSig.contentEquals(signature)
+                      } catch (e: Exception) {
+                          false
+                      }
+
+                      if (!isSignatureValid) {
+                          return LicenseStatus.Invalid("امضای دیجیتال کد نامعتبر است یا دستکاری شده است.")
+                      }
+
+                      val tokenDeviceId = String(payload, 0, 8, Charsets.US_ASCII).trim()
+                      val myDeviceId = DeviceIdProvider.getCleanDeviceId(context)
+
+                      if (!tokenDeviceId.equals(myDeviceId, ignoreCase = true)) {
+                          return LicenseStatus.Invalid("این کد متعلق به این گوشی نیست! (قفل تک‌دستگاهی)")
+                      }
+
+                      val expiryEpoch = ByteBuffer.wrap(payload, 8, 8).long
+                      val nowSec = TimeGuard.getCurrentVerifiedTimeSec(context)
+
+                      val remaining = expiryEpoch - nowSec
+                      return if (remaining <= 0L) {
+                          LicenseStatus.Expired("مهلت استفاده ۵ روزه این کد تمام شده است. لطفاً از ربات تلگرام کد جدید بگیرید.")
+                      } else {
+                          LicenseStatus.Valid(remainingSeconds = remaining, expiryEpochSec = expiryEpoch)
+                      }
+                  }
+
+                  fun formatRemainingTime(seconds: Long): String {
+                      if (seconds <= 0) return "منقضی شده"
+                      val days = seconds / 86400
+                      val hours = (seconds % 86400) / 3600
+                      val mins = (seconds % 3600) / 60
+                      val secs = seconds % 60
+                      return "${days} روز و ${hours} ساعت و ${mins} دقیقه و ${secs} ثانیه"
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/sub/DohClient.kt", r"""
+              package com.multivpn.app.sub
+
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.withContext
+              import okhttp3.HttpUrl.Companion.toHttpUrl
+              import okhttp3.OkHttpClient
+              import okhttp3.Request
+              import okhttp3.dnsoverhttps.DnsOverHttps
+              import java.net.InetAddress
+              import java.util.concurrent.TimeUnit
+
+              object DohClient {
+                  private val bootstrapClient = OkHttpClient.Builder()
+                      .connectTimeout(8, TimeUnit.SECONDS)
+                      .readTimeout(8, TimeUnit.SECONDS)
+                      .build()
+
+                  private val dohDns = DnsOverHttps.Builder()
+                      .client(bootstrapClient)
+                      .url("https://1.1.1.1/dns-query".toHttpUrl())
+                      .bootstrapDnsHosts(
+                          InetAddress.getByName("1.1.1.1"),
+                          InetAddress.getByName("1.0.0.1"),
+                          InetAddress.getByName("8.8.8.8")
+                      )
+                      .build()
+
+                  private val dohHttpClient = bootstrapClient.newBuilder()
+                      .dns(dohDns)
+                      .build()
+
+                  suspend fun fetchUrlText(url: String): String = withContext(Dispatchers.IO) {
+                      val req = Request.Builder()
+                          .url(url)
+                          .header("User-Agent", "MultiCoreVPN/2.2 (Android; Sing-box; Xray)")
+                          .build()
+
+                      try {
+                          dohHttpClient.newCall(req).execute().use { resp ->
+                              if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                              resp.body?.string() ?: throw Exception("پاسخ خالی از سرور")
+                          }
+                      } catch (e: Exception) {
+                          bootstrapClient.newCall(req).execute().use { resp ->
+                              if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                              resp.body?.string() ?: throw Exception("پاسخ خالی از سرور")
+                          }
+                      }
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/sub/SubManager.kt", r"""
+              package com.multivpn.app.sub
+
+              import android.content.Context
+              import android.util.Base64
+              import com.multivpn.app.security.TimeGuard
+              import org.json.JSONObject
+              import java.net.URLDecoder
+              import java.util.UUID
+
+              data class VpnConfig(
+                  val id: String = UUID.randomUUID().toString(),
+                  val name: String,
+                  val coreType: String,
+                  val protocol: String,
+                  val host: String,
+                  val port: Int,
+                  val rawConfig: String,
+                  var pingMs: Long = -1L
+              )
+
+              object SubManager {
+                  private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
+
+                  // <<< آدرس ساب‌لینک خودت را اینجا بگذار >>>
+                  private val SUBSCRIPTION_URLS = listOf(
+                      "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
+                  )
+
+                  fun loadCachedConfigs(context: Context): List<VpnConfig> {
+                      val cached = TimeGuard.getSecurePrefs(context).getString(KEY_CACHED_RAW_SUB, null)
+                      return if (!cached.isNullOrBlank()) parseRawSubscription(cached) else emptyList()
+                  }
+
+                  fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> = loadCachedConfigs(context)
+
+                  suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
+                      val combinedRaw = StringBuilder()
+                      for (url in SUBSCRIPTION_URLS) {
+                          try {
+                              val text = DohClient.fetchUrlText(url)
+                              combinedRaw.append(decodeSubscriptionText(text)).append("\n")
+                          } catch (_: Exception) {
+                          }
+                      }
+                      val finalRaw = combinedRaw.toString()
+                      if (finalRaw.isBlank()) {
+                          throw Exception("عدم دسترسی به سرور ساب‌لینک")
+                      }
+                      val configs = parseRawSubscription(finalRaw)
+                      if (configs.isNotEmpty()) {
+                          TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, finalRaw).apply()
+                      }
+                      return configs
+                  }
+
+                  private fun decodeSubscriptionText(rawText: String): String {
+                      val trimmed = rawText.trim()
+                      if (trimmed.contains("://")) return trimmed
+                      val cleanB64 = trimmed.filterNot { it.isWhitespace() }
+                      val padded = cleanB64.padEnd((cleanB64.length + 3) / 4 * 4, '=')
+                      return try {
+                          String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+                      } catch (_: Exception) {
+                          try {
+                              String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
+                          } catch (_: Exception) {
+                              trimmed
+                          }
+                      }
+                  }
+
+                  fun parseRawSubscription(rawText: String): List<VpnConfig> {
+                      val decodedContent = decodeSubscriptionText(rawText)
+                      val list = mutableListOf<VpnConfig>()
+
+                      for (rawLine in decodedContent.lines()) {
+                          val line = rawLine.trim()
+                          if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) continue
+
+                          val parsed = when {
+                              line.startsWith("vless://", ignoreCase = true) -> parseGenericUri(line, "vless", "Sing-box (Xray)")
+                              line.startsWith("ss://", ignoreCase = true) -> parseShadowsocksUri(line)
+                              line.startsWith("hy2://", ignoreCase = true) -> parseGenericUri(line, "hy2", "Sing-box (Xray)")
+                              line.startsWith("hysteria2://", ignoreCase = true) -> parseGenericUri(line, "hy2", "Sing-box (Xray)")
+                              line.startsWith("vmess://", ignoreCase = true) -> parseVmess(line)
+                              line.startsWith("trojan://", ignoreCase = true) -> parseGenericUri(line, "trojan", "Sing-box (Xray)")
+                              line.startsWith("tuic://", ignoreCase = true) -> parseGenericUri(line, "tuic", "Sing-box (Xray)")
+                              line.startsWith("awg://", ignoreCase = true) ||
+                              line.startsWith("wg://", ignoreCase = true) ||
+                              line.startsWith("wireguard://", ignoreCase = true) -> parseGenericUri(line, "awg", "AmneziaWG")
+                              line.startsWith("ovpn://", ignoreCase = true) -> parseGenericUri(line, "ovpn", "OpenVPN")
+                              else -> null
+                          }
+
+                          if (parsed != null) {
+                              list.add(parsed)
+                          }
+                      }
+                      return list
+                  }
+
+                  private fun parseGenericUri(uriStr: String, protocol: String, coreType: String): VpnConfig? {
+                      return try {
+                          val withoutScheme = uriStr.substringAfter("://")
+                          val mainPart = withoutScheme.substringBefore("#")
+                          val rawFragment = if (withoutScheme.contains("#")) withoutScheme.substringAfterLast("#") else ""
+
+                          val remark = if (rawFragment.isNotBlank()) {
+                              try { URLDecoder.decode(rawFragment, "UTF-8") } catch (_: Exception) { rawFragment }
+                          } else ""
+
+                          val authorityAndPath = mainPart.substringBefore("?")
+                          val hostPortPart = if (authorityAndPath.contains("@")) {
+                              authorityAndPath.substringAfterLast("@")
+                          } else {
+                              authorityAndPath
+                          }.substringBefore("/")
+
+                          val host: String
+                          val port: Int
+
+                          if (hostPortPart.startsWith("[")) {
+                              host = hostPortPart.substringBefore("]") + "]"
+                              port = hostPortPart.substringAfter("]:", "443").toIntOrNull() ?: 443
+                          } else {
+                              host = hostPortPart.substringBefore(":").trim()
+                              port = hostPortPart.substringAfter(":", "443").toIntOrNull() ?: 443
+                          }
+
+                          if (host.isBlank()) return null
+
+                          val finalName = remark.ifBlank { "${protocol.uppercase()} - $host:$port" }.take(45)
+                          VpnConfig(
+                              name = finalName,
+                              coreType = coreType,
+                              protocol = protocol,
+                              host = host,
+                              port = port,
+                              rawConfig = uriStr
+                          )
+                      } catch (_: Exception) {
+                          null
+                      }
+                  }
+
+                  private fun parseShadowsocksUri(uriStr: String): VpnConfig? {
+                      return try {
+                          val withoutScheme = uriStr.substringAfter("://")
+                          val mainPart = withoutScheme.substringBefore("#").substringBefore("?")
+                          val rawFragment = if (withoutScheme.contains("#")) withoutScheme.substringAfterLast("#") else ""
+                          val remark = if (rawFragment.isNotBlank()) {
+                              try { URLDecoder.decode(rawFragment, "UTF-8") } catch (_: Exception) { rawFragment }
+                          } else ""
+
+                          val hostPortPart = if (mainPart.contains("@")) {
+                              mainPart.substringAfterLast("@").substringBefore("/")
+                          } else {
+                              val b64 = try { URLDecoder.decode(mainPart.substringBefore("/").trim(), "UTF-8") } catch (_: Exception) { mainPart.substringBefore("/").trim() }
+                              val padded = b64.padEnd((b64.length + 3) / 4 * 4, '=')
+                              val decoded = try {
+                                  String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
+                              } catch (_: Exception) {
+                                  String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+                              }
+                              decoded.substringAfterLast("@")
+                          }
+
+                          val host = hostPortPart.substringBefore(":").trim()
+                          val port = hostPortPart.substringAfter(":", "443").toIntOrNull() ?: 443
+                          if (host.isBlank()) return null
+
+                          val finalName = remark.ifBlank { "SS - $host:$port" }.take(45)
+                          VpnConfig(
+                              name = finalName,
+                              coreType = "Sing-box (Xray)",
+                              protocol = "ss",
+                              host = host,
+                              port = port,
+                              rawConfig = uriStr
+                          )
+                      } catch (_: Exception) {
+                          null
+                      }
+                  }
+
+                  private fun parseVmess(uriStr: String): VpnConfig? {
+                      return try {
+                          val b64 = uriStr.substringAfter("://").trim()
+                          val padded = b64.padEnd((b64.length + 3) / 4 * 4, '=')
+                          val jsonStr = try {
+                              String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+                          } catch (_: Exception) {
+                              String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
+                          }
+                          val json = JSONObject(jsonStr)
+                          val host = json.optString("add", "").trim()
+                          val port = json.optString("port", "443").toIntOrNull() ?: json.optInt("port", 443)
+                          val name = json.optString("ps", "VMess-$host").ifBlank { "VMess-$host" }
+                          if (host.isBlank()) null else VpnConfig(
+                              name = name.take(45),
+                              coreType = "Sing-box (Xray)",
+                              protocol = "vmess",
+                              host = host,
+                              port = port,
+                              rawConfig = uriStr
+                          )
+                      } catch (_: Exception) {
+                          null
+                      }
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/sub/PingTester.kt", r"""
+              package com.multivpn.app.sub
+
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.async
+              import kotlinx.coroutines.awaitAll
+              import kotlinx.coroutines.coroutineScope
+              import kotlinx.coroutines.sync.Semaphore
+              import kotlinx.coroutines.sync.withPermit
+              import kotlinx.coroutines.withContext
+              import java.net.InetSocketAddress
+              import java.net.Socket
+
+              object PingTester {
+                  private val semaphore = Semaphore(10)
+
+                  suspend fun measureTcpPing(host: String, port: Int, timeoutMs: Int = 2500): Long = withContext(Dispatchers.IO) {
+                      try {
+                          val start = System.currentTimeMillis()
+                          Socket().use { socket ->
+                              socket.connect(InetSocketAddress(host.removeSurrounding("[", "]"), port), timeoutMs)
+                          }
+                          val elapsed = System.currentTimeMillis() - start
+                          if (elapsed <= 0L) 1L else elapsed
+                      } catch (e: Exception) {
+                          -2L
+                      }
+                  }
+
+                  suspend fun pingAllConfigs(configs: List<VpnConfig>): List<VpnConfig> = coroutineScope {
+                      val jobs = configs.map { cfg ->
+                          async(Dispatchers.IO) {
+                              semaphore.withPermit {
+                                  val latency = measureTcpPing(cfg.host, cfg.port)
+                                  cfg.copy(pingMs = latency)
+                              }
+                          }
+                      }
+                      val results = jobs.awaitAll()
+                      results.sortedWith(compareBy {
+                          when {
+                              it.pingMs > 0 -> it.pingMs
+                              it.pingMs == -1L -> 999998L
+                              else -> 999999L
+                          }
+                      })
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/core/CoreConfigGenerator.kt", r"""
+              package com.multivpn.app.core
+
+              import android.util.Base64
+              import com.multivpn.app.sub.VpnConfig
+              import org.json.JSONArray
+              import org.json.JSONObject
+              import java.net.URLDecoder
+
+              object CoreConfigGenerator {
+                  const val LOCAL_SOCKS_PORT = 10808
+                  const val LOCAL_HTTP_PORT = 10809
+
+                  fun buildHysteria2Json(config: VpnConfig, resolvedHostIp: String): String {
+                      val raw = config.rawConfig.trim()
+                      val withoutScheme = raw.substringAfter("://").substringBefore("#")
+                      val userPass = withoutScheme.substringBefore("@")
+                      val authPassword = urlDecode(userPass.removeSuffix(":"))
+                      val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
+
+                      val sni = params["sni"]?.ifBlank { null } ?: config.host
+                      val insecure = params["insecure"] == "1" || params["insecure"] == "true" || params["allowInsecure"] == "1"
+                      val obfsType = params["obfs"] ?: ""
+                      val obfsPassword = params["obfs-password"] ?: ""
+
+                      val serverAddress = if (resolvedHostIp.contains(":")) "[$resolvedHostIp]:${config.port}" else "$resolvedHostIp:${config.port}"
+
+                      return JSONObject().apply {
+                          put("server", serverAddress)
+                          put("auth", authPassword)
+                          put("tls", JSONObject().apply {
+                              put("sni", sni)
+                              put("insecure", insecure)
+                          })
+                          if (obfsType.equals("salamander", ignoreCase = true) && obfsPassword.isNotBlank()) {
+                              put("obfs", JSONObject().apply {
+                                  put("type", "salamander")
+                                  put("salamander", JSONObject().apply {
+                                      put("password", obfsPassword)
+                                  })
+                              })
+                          }
+                          put("socks5", JSONObject().apply {
+                              put("listen", "127.0.0.1:$LOCAL_SOCKS_PORT")
+                          })
+                          put("http", JSONObject().apply {
+                              put("listen", "127.0.0.1:$LOCAL_HTTP_PORT")
+                          })
+                      }.toString(2)
+                  }
+
+                  fun buildXrayJson(config: VpnConfig, resolvedHostIp: String): String {
+                      val root = JSONObject()
+                      root.put("log", JSONObject().apply { put("loglevel", "warning") })
+                      root.put("dns", JSONObject().apply {
+                          put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
+                      })
+
+                      val inbounds = JSONArray()
+                      inbounds.put(JSONObject().apply {
+                          put("tag", "socks-in")
+                          put("port", LOCAL_SOCKS_PORT)
+                          put("listen", "127.0.0.1")
+                          put("protocol", "socks")
+                          put("sniffing", JSONObject().apply {
+                              put("enabled", true)
+                              put("destOverride", JSONArray().put("http").put("tls"))
+                              put("routeOnly", true)
+                          })
+                          put("settings", JSONObject().apply {
+                              put("auth", "noauth")
+                              put("udp", true)
+                          })
+                      })
+                      inbounds.put(JSONObject().apply {
+                          put("tag", "http-in")
+                          put("port", LOCAL_HTTP_PORT)
+                          put("listen", "127.0.0.1")
+                          put("protocol", "http")
+                          put("sniffing", JSONObject().apply {
+                              put("enabled", true)
+                              put("destOverride", JSONArray().put("http").put("tls"))
+                              put("routeOnly", true)
+                          })
+                      })
+                      root.put("inbounds", inbounds)
+
+                      val outbounds = JSONArray()
+                      outbounds.put(buildMainOutbound(config, resolvedHostIp))
+                      outbounds.put(JSONObject().apply {
+                          put("tag", "direct")
+                          put("protocol", "freedom")
+                      })
+                      root.put("outbounds", outbounds)
+                      return root.toString(2)
+                  }
+
+                  private fun buildMainOutbound(config: VpnConfig, resolvedHostIp: String): JSONObject {
+                      val raw = config.rawConfig.trim()
+                      return when {
+                          raw.startsWith("vless://", ignoreCase = true) -> parseVlessOutbound(raw, config.host, config.port, resolvedHostIp)
+                          raw.startsWith("ss://", ignoreCase = true) -> parseShadowsocksOutbound(raw, resolvedHostIp)
+                          raw.startsWith("vmess://", ignoreCase = true) -> parseVmessOutbound(raw, resolvedHostIp)
+                          raw.startsWith("trojan://", ignoreCase = true) -> parseTrojanOutbound(raw, config.host, config.port, resolvedHostIp)
+                          else -> throw Exception("پروتکل ${config.protocol} پشتیبانی نمی‌شود")
+                      }
+                  }
+
+                  private fun parseVlessOutbound(raw: String, originalHost: String, port: Int, resolvedHostIp: String): JSONObject {
+                      val withoutScheme = raw.substringAfter("://").substringBefore("#")
+                      val uuid = urlDecode(withoutScheme.substringBefore("@").trim())
+                      val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
+                      val encryption = params["encryption"]?.ifBlank { "none" } ?: "none"
+                      val net = (params["type"] ?: "tcp").lowercase()
+                      val flow = params["flow"] ?: ""
+
+                      val userObj = JSONObject().apply {
+                          put("id", uuid)
+                          put("encryption", encryption)
+                          if (flow.isNotBlank() && (net == "tcp" || net == "raw" || net == "xhttp")) {
+                              put("flow", flow)
+                          }
+                      }
+                      val vnextObj = JSONObject().apply {
+                          put("address", resolvedHostIp)
+                          put("port", port)
+                          put("users", JSONArray().put(userObj))
+                      }
+                      return JSONObject().apply {
+                          put("tag", "proxy")
+                          put("protocol", "vless")
+                          put("settings", JSONObject().apply { put("vnext", JSONArray().put(vnextObj)) })
+                          put("streamSettings", buildStreamSettings(params, originalHost))
+                      }
+                  }
+
+                  private fun parseTrojanOutbound(raw: String, originalHost: String, port: Int, resolvedHostIp: String): JSONObject {
+                      val withoutScheme = raw.substringAfter("://").substringBefore("#")
+                      val password = urlDecode(withoutScheme.substringBefore("@").trim())
+                      val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
+                      val serverObj = JSONObject().apply {
+                          put("address", resolvedHostIp)
+                          put("port", port)
+                          put("password", password)
+                      }
+                      return JSONObject().apply {
+                          put("tag", "proxy")
+                          put("protocol", "trojan")
+                          put("settings", JSONObject().apply { put("servers", JSONArray().put(serverObj)) })
+                          put("streamSettings", buildStreamSettings(params, originalHost, defaultSecurity = "tls"))
+                      }
+                  }
+
+                  private fun parseShadowsocksOutbound(raw: String, resolvedHostIp: String): JSONObject {
+                      val withoutScheme = raw.substringAfter("://").substringBefore("#").substringBefore("?")
+                      val method: String
+                      val password: String
+                      val port: Int
+
+                      if (withoutScheme.contains("@")) {
+                          val rawUser = urlDecode(withoutScheme.substringBeforeLast("@").trim())
+                          val hostPort = withoutScheme.substringAfterLast("@").substringBefore("/")
+                          port = hostPort.substringAfterLast(":", "443").toIntOrNull() ?: 443
+                          val decodedUser = if (rawUser.contains(":")) rawUser else decodeBase64Safe(rawUser)
+                          method = decodedUser.substringBefore(":").trim()
+                          password = decodedUser.substringAfter(":").trim()
+                      } else {
+                          val decodedAll = decodeBase64Safe(urlDecode(withoutScheme.substringBefore("/").trim()))
+                          val userPart = decodedAll.substringBeforeLast("@")
+                          val hostPort = decodedAll.substringAfterLast("@")
+                          method = userPart.substringBefore(":").trim()
+                          password = userPart.substringAfter(":").trim()
+                          port = hostPort.substringAfterLast(":", "443").toIntOrNull() ?: 443
+                      }
+
+                      val serverObj = JSONObject().apply {
+                          put("address", resolvedHostIp)
+                          put("port", port)
+                          put("method", method)
+                          put("password", password)
+                      }
+                      return JSONObject().apply {
+                          put("tag", "proxy")
+                          put("protocol", "shadowsocks")
+                          put("settings", JSONObject().apply { put("servers", JSONArray().put(serverObj)) })
+                      }
+                  }
+
+                  private fun parseVmessOutbound(raw: String, resolvedHostIp: String): JSONObject {
+                      val b64 = raw.substringAfter("://").trim()
+                      val j = JSONObject(decodeBase64Safe(b64))
+                      val originalHost = j.optString("add", "").trim()
+                      val port = j.optString("port", "443").toIntOrNull() ?: j.optInt("port", 443)
+                      val id = j.optString("id", "").trim()
+                      val aid = j.optString("aid", "0").toIntOrNull() ?: 0
+                      val scy = j.optString("scy", "auto").ifBlank { "auto" }
+                      val net = j.optString("net", "tcp").ifBlank { "tcp" }.lowercase()
+                      val tls = j.optString("tls", "none").lowercase()
+                      val sni = j.optString("sni", originalHost).ifBlank { originalHost }
+                      val wsHost = j.optString("host", originalHost).ifBlank { originalHost }
+                      val path = j.optString("path", "/").ifBlank { "/" }
+
+                      val userObj = JSONObject().apply {
+                          put("id", id)
+                          put("alterId", aid)
+                          put("security", scy)
+                      }
+                      val vnextObj = JSONObject().apply {
+                          put("address", resolvedHostIp)
+                          put("port", port)
+                          put("users", JSONArray().put(userObj))
+                      }
+                      val params = mapOf(
+                          "type" to net,
+                          "security" to if (tls == "tls") "tls" else "none",
+                          "sni" to sni,
+                          "host" to wsHost,
+                          "path" to path,
+                          "serviceName" to path.removePrefix("/")
+                      )
+                      return JSONObject().apply {
+                          put("tag", "proxy")
+                          put("protocol", "vmess")
+                          put("settings", JSONObject().apply { put("vnext", JSONArray().put(vnextObj)) })
+                          put("streamSettings", buildStreamSettings(params, originalHost))
+                      }
+                  }
+
+                  private fun buildStreamSettings(params: Map<String, String>, originalHost: String, defaultSecurity: String = "none"): JSONObject {
+                      val rawNet = (params["type"] ?: "tcp").lowercase()
+                      val net = when (rawNet) {
+                          "httpupgrade" -> "httpupgrade"
+                          "splithttp", "xhttp" -> "splithttp"
+                          "ws", "websocket" -> "ws"
+                          "grpc", "gun" -> "grpc"
+                          else -> "tcp"
+                      }
+                      val security = (params["security"] ?: defaultSecurity).lowercase()
+                      val sni = params["sni"]?.ifBlank { null } ?: params["host"]?.ifBlank { null } ?: originalHost
+                      val fp = params["fp"]?.ifBlank { "chrome" } ?: "chrome"
+                      val pbk = params["pbk"] ?: ""
+                      val sid = params["sid"] ?: ""
+                      val spx = params["spx"] ?: "/"
+                      val path = params["path"]?.ifBlank { "/" } ?: "/"
+                      val wsHost = params["host"]?.ifBlank { originalHost } ?: originalHost
+                      val serviceName = params["serviceName"] ?: ""
+                      val headerType = params["headerType"] ?: "none"
+
+                      return JSONObject().apply {
+                          put("network", net)
+                          put("security", security)
+                          if (security == "tls") {
+                              put("tlsSettings", JSONObject().apply {
+                                  put("serverName", sni)
+                                  put("fingerprint", fp)
+                                  put("allowInsecure", true)
+                              })
+                          } else if (security == "reality") {
+                              put("realitySettings", JSONObject().apply {
+                                  put("serverName", sni)
+                                  put("fingerprint", fp)
+                                  put("publicKey", pbk)
+                                  put("shortId", sid)
+                                  put("spiderX", spx)
+                              })
+                          }
+                          when (net) {
+                              "ws" -> put("wsSettings", JSONObject().apply {
+                                  put("path", path)
+                                  put("headers", JSONObject().apply { put("Host", wsHost) })
+                              })
+                              "httpupgrade" -> put("httpupgradeSettings", JSONObject().apply {
+                                  put("path", path)
+                                  put("host", wsHost)
+                              })
+                              "splithttp" -> put("splithttpSettings", JSONObject().apply {
+                                  put("path", path)
+                                  put("host", wsHost)
+                              })
+                              "grpc" -> put("grpcSettings", JSONObject().apply { put("serviceName", serviceName) })
+                              "tcp" -> if (headerType.equals("http", ignoreCase = true)) {
+                                  put("tcpSettings", JSONObject().apply {
+                                      put("header", JSONObject().apply {
+                                          put("type", "http")
+                                          put("request", JSONObject().apply {
+                                              put("path", JSONArray().put(path))
+                                              put("headers", JSONObject().apply { put("Host", JSONArray().put(wsHost)) })
+                                          })
+                                      })
+                                  })
+                              }
+                          }
+                      }
+                  }
+
+                  private fun parseQueryParams(query: String): Map<String, String> {
+                      val map = mutableMapOf<String, String>()
+                      if (query.isBlank()) return map
+                      for (pair in query.split("&")) {
+                          if (pair.isBlank()) continue
+                          map[urlDecode(pair.substringBefore("="))] = urlDecode(pair.substringAfter("=", ""))
+                      }
+                      return map
+                  }
+
+                  private fun urlDecode(str: String): String = try { URLDecoder.decode(str, "UTF-8") } catch (_: Exception) { str }
+
+                  private fun decodeBase64Safe(input: String): String {
+                      val clean = input.filterNot { it.isWhitespace() }
+                      val padded = clean.padEnd((clean.length + 3) / 4 * 4, '=')
+                      return try {
+                          String(Base64.decode(padded, Base64.URL_SAFE), Charsets.UTF_8)
+                      } catch (_: Exception) {
+                          String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+                      }
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/core/CoreEngineRunner.kt", r"""
+              package com.multivpn.app.core
+
+              import android.content.Context
+              import com.multivpn.app.sub.VpnConfig
+              import kotlinx.coroutines.Dispatchers
+              import kotlinx.coroutines.delay
+              import kotlinx.coroutines.withContext
+              import okhttp3.OkHttpClient
+              import okhttp3.Request
+              import org.json.JSONObject
+              import java.io.File
+              import java.net.InetAddress
+              import java.net.InetSocketAddress
+              import java.net.Proxy
+              import java.net.Socket
+              import java.util.concurrent.TimeUnit
+
+              object CoreEngineRunner {
+                  @Volatile
+                  private var coreProcess: Process? = null
+
+                  @Volatile
+                  var lastErrorLog: String = ""
+
+                  private val dohResolveClient = OkHttpClient.Builder()
+                      .connectTimeout(4, TimeUnit.SECONDS)
+                      .readTimeout(4, TimeUnit.SECONDS)
+                      .build()
+
+                  suspend fun startCore(context: Context, config: VpnConfig): Boolean = withContext(Dispatchers.IO) {
+                      stopCore()
+                      lastErrorLog = ""
+
+                      try {
+                          val resolvedIp = resolveHostToIp(config.host.removeSurrounding("[", "]"))
+                          val nativeDir = context.applicationInfo.nativeLibraryDir
+
+                          val isHysteria2 = config.protocol.equals("hy2", ignoreCase = true) ||
+                              config.rawConfig.startsWith("hy2://", ignoreCase = true) ||
+                              config.rawConfig.startsWith("hysteria2://", ignoreCase = true)
+
+                          val pb = if (isHysteria2) {
+                              val hyBinary = File(nativeDir, "libhysteria.so")
+                              if (!hyBinary.exists()) {
+                                  lastErrorLog = "فایل هسته libhysteria.so یافت نشد!"
+                                  return@withContext false
+                              }
+                              hyBinary.setExecutable(true)
+                              val configFile = File(context.filesDir, "active_hy2.json")
+                              configFile.writeText(CoreConfigGenerator.buildHysteria2Json(config, resolvedIp), Charsets.UTF_8)
+                              ProcessBuilder(hyBinary.absolutePath, "client", "-c", configFile.absolutePath)
+                          } else {
+                              val xrayBinary = File(nativeDir, "libxray.so")
+                              if (!xrayBinary.exists()) {
+                                  lastErrorLog = "فایل هسته libxray.so یافت نشد!"
+                                  return@withContext false
+                              }
+                              xrayBinary.setExecutable(true)
+                              val configFile = File(context.filesDir, "active_xray.json")
+                              configFile.writeText(CoreConfigGenerator.buildXrayJson(config, resolvedIp), Charsets.UTF_8)
+                              ProcessBuilder(xrayBinary.absolutePath, "run", "-c", configFile.absolutePath).apply {
+                                  environment()["XRAY_LOCATION_ASSET"] = nativeDir
+                              }
+                          }
+
+                          pb.directory(context.filesDir)
+                          pb.redirectErrorStream(true)
+                          coreProcess = pb.start()
+
+                          repeat(15) {
+                              delay(200L)
+                              if (isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT)) {
+                                  return@withContext true
+                              }
+                              val exitVal = try { coreProcess?.exitValue() } catch (_: Exception) { null }
+                              if (exitVal != null) break
+                          }
+
+                          val exitVal = try { coreProcess?.exitValue() } catch (_: Exception) { null }
+                          if (exitVal != null) {
+                              val out = coreProcess?.inputStream?.bufferedReader()?.readText()?.take(220) ?: ""
+                              lastErrorLog = "خطای هسته: $out"
+                              return@withContext false
+                          }
+                          true
+                      } catch (e: Exception) {
+                          lastErrorLog = "خطا در آماده‌سازی کانفیگ: ${e.message}"
+                          false
+                      }
+                  }
+
+                  private fun resolveHostToIp(host: String): String {
+                      if (host.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) || host.contains(":")) return host
+                      try {
+                          val ip = InetAddress.getByName(host).hostAddress
+                          if (!ip.isNullOrBlank() && !ip.startsWith("10.") && !ip.startsWith("127.")) return ip
+                      } catch (_: Exception) {}
+                      try {
+                          val req = Request.Builder()
+                              .url("https://1.1.1.1/dns-query?name=$host&type=A")
+                              .header("Accept", "application/dns-json")
+                              .build()
+                          dohResolveClient.newCall(req).execute().use { resp ->
+                              val body = resp.body?.string() ?: return host
+                              val answers = JSONObject(body).optJSONArray("Answer") ?: return host
+                              for (i in 0 until answers.length()) {
+                                  val item = answers.getJSONObject(i)
+                                  if (item.optInt("type") == 1) {
+                                      val data = item.optString("data", "")
+                                      if (data.isNotBlank()) return data
+                                  }
+                              }
+                          }
+                      } catch (_: Exception) {}
+                      return host
+                  }
+
+                  fun stopCore() {
+                      try {
+                          coreProcess?.destroy()
+                          coreProcess?.destroyForcibly()
+                      } catch (_: Exception) {
+                      } finally {
+                          coreProcess = null
+                      }
+                  }
+
+                  fun isCoreRunning(): Boolean {
+                      val proc = coreProcess ?: return false
+                      return try {
+                          proc.exitValue()
+                          false
+                      } catch (e: IllegalThreadStateException) {
+                          true
+                      }
+                  }
+
+                  private fun isLocalPortListening(port: Int): Boolean {
+                      return try {
+                          Socket().use { s ->
+                              s.connect(InetSocketAddress("127.0.0.1", port), 250)
+                              true
+                          }
+                      } catch (_: Exception) {
+                          false
+                      }
+                  }
+
+                  suspend fun measureRealTunnelDelay(): Long = withContext(Dispatchers.IO) {
+                      try {
+                          val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT))
+                          val client = OkHttpClient.Builder()
+                              .proxy(proxy)
+                              .connectTimeout(7, TimeUnit.SECONDS)
+                              .readTimeout(7, TimeUnit.SECONDS)
+                              .build()
+                          val start = System.currentTimeMillis()
+                          val req = Request.Builder().url("http://cp.cloudflare.com/generate_204").build()
+                          client.newCall(req).execute().use { resp ->
+                              if (resp.code == 204 || resp.isSuccessful) {
+                                  val elapsed = System.currentTimeMillis() - start
+                                  return@withContext if (elapsed <= 0L) 1L else elapsed
+                              }
+                          }
+                          -1L
+                      } catch (e: Exception) {
+                          -1L
+                      }
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/multivpn/app/MainActivity.kt", r"""
+              package com.multivpn.app
+
+              import android.app.Activity
+              import android.app.NotificationChannel
+              import android.app.NotificationManager
+              import android.app.PendingIntent
+              import android.content.ClipData
+              import android.content.ClipboardManager
+              import android.content.Context
+              import android.content.Intent
+              import android.net.ProxyInfo
+              import android.net.VpnService
+              import android.os.Build
+              import android.os.Bundle
+              import android.os.ParcelFileDescriptor
+              import android.widget.Toast
+              import androidx.activity.ComponentActivity
+              import androidx.activity.compose.rememberLauncherForActivityResult
+              import androidx.activity.compose.setContent
+              import androidx.activity.result.contract.ActivityResultContracts
+              import androidx.compose.foundation.layout.*
+              import androidx.compose.foundation.lazy.LazyColumn
+              import androidx.compose.foundation.lazy.items
+              import androidx.compose.material3.*
+              import androidx.compose.runtime.*
+              import androidx.compose.ui.Alignment
+              import androidx.compose.ui.Modifier
+              import androidx.compose.ui.platform.LocalContext
+              import androidx.compose.ui.text.font.FontWeight
+              import androidx.compose.ui.unit.dp
+              import androidx.core.app.NotificationCompat
+              import com.multivpn.app.core.CoreConfigGenerator
+              import com.multivpn.app.core.CoreEngineRunner
+              import com.multivpn.app.security.DeviceIdProvider
+              import com.multivpn.app.security.LicenseManager
+              import com.multivpn.app.security.LicenseStatus
+              import com.multivpn.app.security.TimeGuard
+              import com.multivpn.app.sub.PingTester
+              import com.multivpn.app.sub.SubManager
+              import com.multivpn.app.sub.VpnConfig
+              import kotlinx.coroutines.*
+
+              class MainActivity : ComponentActivity() {
+                  override fun onCreate(savedInstanceState: Bundle?) {
+                      super.onCreate(savedInstanceState)
+                      setContent {
+                          MaterialTheme {
+                              Surface(
+                                  modifier = Modifier.fillMaxSize(),
+                                  color = MaterialTheme.colorScheme.background
+                              ) {
+                                  SinglePageVpnScreen()
+                              }
+                          }
+                      }
+                  }
+              }
+
+              @Composable
+              fun SinglePageVpnScreen() {
+                  val context = LocalContext.current
+                  val scope = rememberCoroutineScope()
+
+                  val formattedDeviceId = remember { DeviceIdProvider.getFormattedDeviceId(context) }
+                  var licenseStatus by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
+                  var showLicenseDialog by remember { mutableStateOf(licenseStatus !is LicenseStatus.Valid) }
+                  var inputCode by remember { mutableStateOf("") }
+                  var dialogMessage by remember { mutableStateOf("") }
+
+                  var configs by remember { mutableStateOf(SubManager.loadCachedConfigs(context)) }
+                  var selectedCore by remember { mutableStateOf("Sing-box (Xray)") }
+                  var selectedConfig by remember { mutableStateOf<VpnConfig?>(configs.firstOrNull()) }
+
+                  var isConnected by remember { mutableStateOf(CoreEngineRunner.isCoreRunning()) }
+                  var isBusy by remember { mutableStateOf(false) }
+                  var statusText by remember {
+                      mutableStateOf(
+                          if (configs.isEmpty()) "ابتدا دکمه «بروزرسانی ساب‌لینک‌ها» را بزنید"
+                          else "آماده اتصال (${configs.size} کانفیگ دریافت شده)"
+                      )
+                  }
+                  var expandCoreMenu by remember { mutableStateOf(false) }
+
+                  val cores = listOf(
+                      "Sing-box (Xray)",
+                      "AmneziaWG",
+                      "OpenVPN",
+                      "Psiphon",
+                      "Tor"
+                  )
+
+                  val filteredConfigs = remember(configs, selectedCore) {
+                      configs.filter { it.coreType == selectedCore }
+                  }
+
+                  LaunchedEffect(filteredConfigs) {
+                      if (selectedConfig == null || !filteredConfigs.any { it.id == selectedConfig?.id }) {
+                          selectedConfig = filteredConfigs.firstOrNull()
+                      }
+                  }
+
+                  fun connectToSelectedConfig() {
+                      val target = selectedConfig ?: filteredConfigs.firstOrNull()
+                      if (target == null) {
+                          statusText = "کانفیگی وجود ندارد! ابتدا ساب‌لینک را بروزرسانی کنید."
+                          return
+                      }
+                      scope.launch {
+                          isBusy = true
+                          statusText = "در حال اتصال به ${target.name}..."
+                          val coreStarted = CoreEngineRunner.startCore(context, target)
+                          if (coreStarted) {
+                              val serviceIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                                  putExtra("CORE_NAME", target.coreType)
+                                  putExtra("SERVER_NAME", target.name)
+                                  putExtra("SERVER_PING", target.pingMs)
+                              }
+                              context.startService(serviceIntent)
+                              isConnected = true
+
+                              val tunnelPing = CoreEngineRunner.measureRealTunnelDelay()
+                              statusText = if (tunnelPing > 0) {
+                                  "✅ متصل و فعال (پینگ تونل: $tunnelPing ms)"
+                              } else {
+                                  "⚠️ هسته روشن شد اما این سرور پاسخ نداد (کانفیگ دیگری انتخاب کنید)"
+                              }
+                          } else {
+                              isConnected = false
+                              statusText = CoreEngineRunner.lastErrorLog.ifBlank { "خطا در راه‌اندازی این کانفیگ!" }
+                          }
+                          isBusy = false
+                      }
+                  }
+
+                  val vpnPermissionLauncher = rememberLauncherForActivityResult(
+                      contract = ActivityResultContracts.StartActivityForResult()
+                  ) { result ->
+                      if (result.resultCode == Activity.RESULT_OK) {
+                          connectToSelectedConfig()
+                      } else {
+                          statusText = "مجوز ساخت تونل VPN داده نشد!"
+                      }
+                  }
+
+                  LaunchedEffect(Unit) {
+                      TimeGuard.syncNetworkTime(context)
+                      while (isActive) {
+                          val current = LicenseManager.getCurrentLicenseStatus(context)
+                          licenseStatus = current
+
+                          if (current !is LicenseStatus.Valid) {
+                              if (isConnected) {
+                                  isConnected = false
+                                  CoreEngineRunner.stopCore()
+                                  context.stopService(Intent(context, MultiCoreVpnService::class.java))
+                                  statusText = "قطع خودکار: مهلت ۵ روزه به پایان رسید!"
+                              }
+                              showLicenseDialog = true
+                          }
+                          delay(1000L)
+                      }
+                  }
+
+                  if (showLicenseDialog) {
+                      AlertDialog(
+                          onDismissRequest = {
+                              if (licenseStatus is LicenseStatus.Valid) {
+                                  showLicenseDialog = false
+                              }
+                          },
+                          title = {
+                              Text(
+                                  text = if (licenseStatus is LicenseStatus.Expired) "پایان مهلت ۵ روزه!" else "فعال‌سازی برنامه (کد ۵ روزه)",
+                                  fontWeight = FontWeight.Bold
+                              )
+                          },
+                          text = {
+                              Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  val reasonText = when (val s = licenseStatus) {
+                                      is LicenseStatus.Expired -> s.message
+                                      is LicenseStatus.Invalid -> s.reason
+                                      is LicenseStatus.Missing -> "برای استفاده از فیلترشکن، شناسه دستگاه زیر را به ربات تلگرام بفرستید و کد ۵ روزه دریافتی را وارد کنید."
+                                      is LicenseStatus.Valid -> "کد شما فعال است. می‌توانید کد ۵ روزه جدیدی جایگزین کنید."
+                                  }
+                                  Text(text = reasonText)
+
+                                  Card(modifier = Modifier.fillMaxWidth()) {
+                                      Row(
+                                          modifier = Modifier
+                                              .fillMaxWidth()
+                                              .padding(12.dp),
+                                          horizontalArrangement = Arrangement.SpaceBetween,
+                                          verticalAlignment = Alignment.CenterVertically
+                                      ) {
+                                          Column {
+                                              Text("شناسه دستگاه شما:")
+                                              Text(text = formattedDeviceId, fontWeight = FontWeight.Bold)
+                                          }
+                                          Button(onClick = {
+                                              val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                              clipboard.setPrimaryClip(ClipData.newPlainText("DeviceID", formattedDeviceId))
+                                              Toast.makeText(context, "شناسه دستگاه کپی شد", Toast.LENGTH_SHORT).show()
+                                          }) {
+                                              Text("کپی")
+                                          }
+                                      }
+                                  }
+
+                                  OutlinedTextField(
+                                      value = inputCode,
+                                      onValueChange = { inputCode = it },
+                                      label = { Text("کد دریافتی از ربات (MV2-...)") },
+                                      singleLine = true,
+                                      modifier = Modifier.fillMaxWidth()
+                                  )
+
+                                  if (dialogMessage.isNotBlank()) {
+                                      Text(text = dialogMessage, color = MaterialTheme.colorScheme.error)
+                                  }
+                              }
+                          },
+                          confirmButton = {
+                              Button(onClick = {
+                                  scope.launch {
+                                      TimeGuard.syncNetworkTime(context)
+                                      val result = LicenseManager.verifyAndSaveToken(context, inputCode)
+                                      licenseStatus = result
+                                      when (result) {
+                                          is LicenseStatus.Valid -> {
+                                              dialogMessage = ""
+                                              inputCode = ""
+                                              showLicenseDialog = false
+                                              statusText = "کد ۵ روزه تایید شد! آماده اتصال"
+                                          }
+                                          is LicenseStatus.Expired -> dialogMessage = result.message
+                                          is LicenseStatus.Invalid -> dialogMessage = result.reason
+                                          LicenseStatus.Missing -> dialogMessage = "لطفاً کد را وارد کنید."
+                                      }
+                                  }
+                              }) {
+                                  Text("بررسی و فعال‌سازی")
+                              }
+                          },
+                          dismissButton = {
+                              if (licenseStatus is LicenseStatus.Valid) {
+                                  TextButton(onClick = { showLicenseDialog = false }) {
+                                      Text("بستن")
+                                  }
+                              }
+                          }
+                      )
+                  }
+
+                  Column(
+                      modifier = Modifier
+                          .fillMaxSize()
+                          .padding(16.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.SpaceBetween
+                  ) {
+                      Card(modifier = Modifier.fillMaxWidth()) {
+                          Column(modifier = Modifier.padding(12.dp)) {
+                              Row(
+                                  modifier = Modifier.fillMaxWidth(),
+                                  horizontalArrangement = Arrangement.SpaceBetween,
+                                  verticalAlignment = Alignment.CenterVertically
+                              ) {
+                                  Text(text = "شناسه گوشی: $formattedDeviceId", fontWeight = FontWeight.Bold)
+                                  TextButton(onClick = { showLicenseDialog = true }) {
+                                      Text("کد لایسنس")
+                                  }
+                              }
+                              when (val s = licenseStatus) {
+                                  is LicenseStatus.Valid -> {
+                                      Text(text = "مهلت باقی‌مانده: ${LicenseManager.formatRemainingTime(s.remainingSeconds)}")
+                                  }
+                                  is LicenseStatus.Expired -> {
+                                      Text(text = "وضعیت: مهلت ۵ روزه تمام شده است!", color = MaterialTheme.colorScheme.error)
+                                  }
+                                  else -> {
+                                      Text(text = "وضعیت: قفل (کد ۵ روزه وارد نشده)", color = MaterialTheme.colorScheme.error)
+                                  }
+                              }
+                          }
+                      }
+
+                      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                          val isLicenseValid = licenseStatus is LicenseStatus.Valid
+                          Button(
+                              onClick = {
+                                  val currentCheck = LicenseManager.getCurrentLicenseStatus(context)
+                                  if (currentCheck !is LicenseStatus.Valid) {
+                                      showLicenseDialog = true
+                                      return@Button
+                                  }
+                                  if (isConnected) {
+                                      isConnected = false
+                                      CoreEngineRunner.stopCore()
+                                      context.stopService(Intent(context, MultiCoreVpnService::class.java))
+                                      statusText = "اتصال قطع شد"
+                                  } else {
+                                      val prepareIntent = VpnService.prepare(context)
+                                      if (prepareIntent != null) {
+                                          vpnPermissionLauncher.launch(prepareIntent)
+                                      } else {
+                                          connectToSelectedConfig()
+                                      }
+                                  }
+                              },
+                              enabled = isLicenseValid && !isBusy,
+                              modifier = Modifier.size(135.dp)
+                          ) {
+                              Text(if (isConnected) "قطع اتصال" else if (isLicenseValid) "اتصال" else "قفل است")
+                          }
+                          Spacer(modifier = Modifier.height(8.dp))
+                          Text(text = statusText, fontWeight = FontWeight.Medium)
+                          selectedConfig?.let { best ->
+                              val pingStr = when {
+                                  best.pingMs > 0 -> "${best.pingMs} ms"
+                                  best.pingMs == -2L -> "Timeout"
+                                  else -> "تست نشده"
+                              }
+                              Text(text = "کانفیگ انتخابی: [${best.protocol.uppercase()}] ${best.name} ($pingStr)")
+                          }
+                          if (isConnected) {
+                              TextButton(
+                                  onClick = {
+                                      scope.launch {
+                                          statusText = "در حال تست پینگ واقعی تونل..."
+                                          val delayMs = CoreEngineRunner.measureRealTunnelDelay()
+                                          statusText = if (delayMs > 0) {
+                                              "✅ اینترنت تونل برقرار است! (پینگ: $delayMs ms)"
+                                          } else {
+                                              "⚠️ این کانفیگ اینترنت ندارد (کانفیگ دیگری از لیست انتخاب کنید)"
+                                          }
+                                      }
+                                  }
+                              ) {
+                                  Text("تست اینترنت تونل")
+                              }
+                          }
+                      }
+
+                      Card(
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .height(165.dp)
+                      ) {
+                          if (filteredConfigs.isEmpty()) {
+                              Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                  Text("لیست خالی است؛ دکمه «بروزرسانی ساب‌لینک‌ها» را بزنید")
+                              }
+                          } else {
+                              LazyColumn(modifier = Modifier.padding(8.dp)) {
+                                  items(filteredConfigs) { cfg ->
+                                      val pingLabel = when {
+                                          cfg.pingMs > 0 -> "${cfg.pingMs} ms"
+                                          cfg.pingMs == -2L -> "خطا"
+                                          else -> "---"
+                                      }
+                                      val isSelected = selectedConfig?.id == cfg.id
+                                      TextButton(
+                                          onClick = {
+                                              selectedConfig = cfg
+                                              if (isConnected) {
+                                                  connectToSelectedConfig()
+                                              }
+                                          },
+                                          modifier = Modifier.fillMaxWidth()
+                                      ) {
+                                          Row(
+                                              modifier = Modifier.fillMaxWidth(),
+                                              horizontalArrangement = Arrangement.SpaceBetween
+                                          ) {
+                                              Text(
+                                                  text = (if (isSelected) "✅ " else "") + "[${cfg.protocol.uppercase()}] ${cfg.name}",
+                                                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                  modifier = Modifier.weight(1f)
+                                              )
+                                              Text(text = pingLabel)
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      Column(
+                          modifier = Modifier.fillMaxWidth(),
+                          verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                          Box(modifier = Modifier.fillMaxWidth()) {
+                              OutlinedButton(
+                                  onClick = { expandCoreMenu = true },
+                                  modifier = Modifier.fillMaxWidth()
+                              ) {
+                                  Text("هسته فعال: $selectedCore (${filteredConfigs.size} کانفیگ)")
+                              }
+                              DropdownMenu(
+                                  expanded = expandCoreMenu,
+                                  onDismissRequest = { expandCoreMenu = false }
+                              ) {
+                                  cores.forEach { core ->
+                                      DropdownMenuItem(
+                                          text = { Text(core) },
+                                          onClick = {
+                                              selectedCore = core
+                                              expandCoreMenu = false
+                                          }
+                                      )
+                                  }
+                              }
+                          }
+
+                          OutlinedButton(
+                              onClick = {
+                                  scope.launch {
+                                      if (filteredConfigs.isEmpty()) {
+                                          statusText = "ابتدا ساب‌لینک را بروزرسانی کنید!"
+                                          return@launch
+                                      }
+                                      isBusy = true
+                                      statusText = "در حال تست پینگ ${filteredConfigs.size} کانفیگ..."
+                                      val tested = PingTester.pingAllConfigs(configs)
+                                      configs = tested
+                                      val bestValid = tested.firstOrNull { it.pingMs > 0 && it.coreType == selectedCore }
+                                      if (bestValid != null) {
+                                          selectedConfig = bestValid
+                                          statusText = "سریع‌ترین کانفیگ: ${bestValid.name} (${bestValid.pingMs} ms)"
+                                      } else {
+                                          statusText = "تست پینگ تمام شد."
+                                      }
+                                      isBusy = false
+                                  }
+                              },
+                              enabled = !isBusy,
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Text("تست پینگ")
+                          }
+
+                          OutlinedButton(
+                              onClick = {
+                                  scope.launch {
+                                      isBusy = true
+                                      statusText = "در حال دریافت کانفیگ‌های ساب‌لینک..."
+                                      try {
+                                          val fetched = SubManager.fetchAndParseSub(context)
+                                          configs = fetched
+                                          selectedConfig = fetched.firstOrNull { it.coreType == selectedCore }
+                                          statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
+                                      } catch (e: Exception) {
+                                          statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
+                                      }
+                                      isBusy = false
+                                  }
+                              },
+                              enabled = !isBusy,
+                              modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Text("بروزرسانی ساب‌لینک‌ها")
+                          }
+                      }
+                  }
+              }
+
+              class MultiCoreVpnService : VpnService() {
+                  private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+                  private var vpnInterface: ParcelFileDescriptor? = null
+
+                  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                      val coreName = intent?.getStringExtra("CORE_NAME") ?: "Sing-box (Xray)"
+                      val serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
+                      val serverPing = intent?.getLongExtra("SERVER_PING", -1L) ?: -1L
+
+                      startVpnForegroundNotification(coreName, serverName, serverPing)
+                      establishTunnel(serverName)
+                      startExpirationWatchdog()
+                      return START_STICKY
+                  }
+
+                  private fun establishTunnel(serverName: String) {
+                      try {
+                          vpnInterface?.close()
+                          val builder = Builder()
+                              .setSession("MultiCoreVPN - $serverName")
+                              .setMtu(1500)
+                              .addAddress("10.10.0.2", 24)
+                              .addDnsServer("1.1.1.1")
+                              .addDnsServer("8.8.8.8")
+
+                          try {
+                              builder.addDisallowedApplication(packageName)
+                          } catch (_: Exception) {
+                          }
+
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                              builder.setHttpProxy(
+                                  ProxyInfo.buildDirectProxy("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT)
+                              )
+                          }
+
+                          vpnInterface = builder.establish()
+                      } catch (_: Exception) {
+                      }
+                  }
+
+                  private fun startVpnForegroundNotification(coreName: String, serverName: String, ping: Long) {
+                      val channelId = "vpn_active_channel"
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          val channel = NotificationChannel(channelId, "وضعیت اتصال فیلترشکن", NotificationManager.IMPORTANCE_LOW)
+                          nm.createNotificationChannel(channel)
+                      }
+                      val pendingIntent = PendingIntent.getActivity(
+                          this, 0, Intent(this, MainActivity::class.java),
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      val pingText = if (ping > 0) " (${ping}ms)" else ""
+                      val notification = NotificationCompat.Builder(this, channelId)
+                          .setSmallIcon(android.R.drawable.ic_lock_lock)
+                          .setContentTitle("متصل به $coreName")
+                          .setContentText("سرور: $serverName$pingText")
+                          .setContentIntent(pendingIntent)
+                          .setOngoing(true)
+                          .build()
+                      startForeground(1001, notification)
+                  }
+
+                  private fun startExpirationWatchdog() {
+                      serviceScope.coroutineContext.cancelChildren()
+                      serviceScope.launch {
+                          while (isActive) {
+                              val status = LicenseManager.getCurrentLicenseStatus(applicationContext)
+                              if (status !is LicenseStatus.Valid) {
+                                  sendExpirationNotification()
+                                  stopTunnel()
+                                  stopSelf()
+                                  break
+                              }
+                              delay(5000L)
+                          }
+                      }
+                  }
+
+                  private fun stopTunnel() {
+                      try {
+                          CoreEngineRunner.stopCore()
+                          vpnInterface?.close()
+                          vpnInterface = null
+                      } catch (_: Exception) {
+                      }
+                  }
+
+                  private fun sendExpirationNotification() {
+                      val channelId = "vpn_expiry_alert"
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          val channel = NotificationChannel(channelId, "هشدار انقضای کد ۵ روزه", NotificationManager.IMPORTANCE_HIGH)
+                          nm.createNotificationChannel(channel)
+                      }
+                      val notification = NotificationCompat.Builder(this, channelId)
+                          .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                          .setContentTitle("مهلت ۵ روزه به پایان رسید")
+                          .setContentText("اتصال فیلترشکن قطع شد. لطفاً کد جدید را از ربات تلگرام دریافت و وارد کنید.")
+                          .setPriority(NotificationCompat.PRIORITY_HIGH)
+                          .setAutoCancel(true)
+                          .build()
+                      nm.notify(1002, notification)
+                  }
+
+                  override fun onDestroy() {
+                      stopTunnel()
+                      serviceScope.cancel()
+                      super.onDestroy()
+                  }
+
+                  override fun onRevoke() {
+                      stopTunnel()
+                      serviceScope.cancel()
+                      super.onRevoke()
+                      stopSelf()
+                  }
+              }
+          """)
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -34,21 +1874,28 @@ jobs:
             keytool -genkeypair -v -keystore keystore/app.jks -keyalg RSA -keysize 2048 -validity 10000 -alias multivpn -storepass MultiVpnPassword123 -keypass MultiVpnPassword123 -dname "CN=MultiVPN"
           fi
 
+      - name: Commit Synced Project Files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --staged --quiet; then
+            git commit -m "Auto-sync all Phase 4 Kotlin and Gradle files [skip ci]"
+            git pull --rebase || true
+            git push || true
+          fi
+
       - name: Download Core Binaries (ARM64)
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          
-          # دانلود هسته Xray
           curl -L --retry 3 -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-android-arm64-v8a.zip"
           unzip -o xray.zip -d xray_extracted
           mv xray_extracted/xray app/src/main/jniLibs/arm64-v8a/libxray.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libxray.so
           rm -rf xray.zip xray_extracted
 
-          # دانلود هسته Hysteria2
           curl -L --retry 3 -o app/src/main/jniLibs/arm64-v8a/libhysteria.so "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm64"
           chmod +x app/src/main/jniLibs/arm64-v8a/libhysteria.so
-
           ls -lh app/src/main/jniLibs/arm64-v8a/
 
       - name: Accept Android SDK Licenses
@@ -65,5 +1912,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Clean-MultiCoreVPN-Signed
+          name: MultiCoreVPN-Phase4-Fixed-Signed
           path: app/build/outputs/apk/debug/*.apk
