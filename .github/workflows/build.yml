@@ -26,7 +26,6 @@ jobs:
         run: |
           import os, shutil
 
-          # حذف پوشه اضافی ربات پایتون قدیمی
           if os.path.exists("telegram_bot"):
               shutil.rmtree("telegram_bot")
 
@@ -165,7 +164,6 @@ jobs:
 
                   <application
                       android:allowBackup="false"
-                      android:extractNativeLibs="true"
                       android:icon="@android:drawable/sym_def_app_icon"
                       android:label="MultiCore VPN"
                       android:supportsRtl="true"
@@ -542,7 +540,7 @@ jobs:
               object SubManager {
                   private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-                  // <<< آدرس ساب‌لینک خودت را اینجا بگذار >>>
+                  // آدرس ساب‌لینک اختصاصی شما
                   private val SUBSCRIPTION_URLS = listOf(
                       "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
                   )
@@ -1171,7 +1169,7 @@ jobs:
                           pb.redirectErrorStream(true)
                           coreProcess = pb.start()
 
-                          repeat(15) {
+                          for (i in 0 until 15) {
                               delay(200L)
                               if (isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT)) {
                                   return@withContext true
@@ -1880,7 +1878,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if ! git diff --staged --quiet; then
-            git commit -m "Auto-sync all Phase 4 Kotlin and Gradle files [skip ci]"
+            git commit -m "Fix loop in CoreEngineRunner and sync all files [skip ci]"
             git pull --rebase || true
             git push || true
           fi
