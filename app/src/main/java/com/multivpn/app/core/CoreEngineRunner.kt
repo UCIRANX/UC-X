@@ -7,7 +7,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -20,54 +22,120 @@ object CoreEngineRunner {
     @Volatile
     var lastErrorLog: String = ""
 
+    private val dohResolveClient = OkHttpClient.Builder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .build()
+
     suspend fun startCore(context: Context, config: VpnConfig): Boolean = withContext(Dispatchers.IO) {
         stopCore()
         lastErrorLog = ""
 
-        val nativeDir = context.applicationInfo.nativeLibraryDir
-        val xrayBinary = File(nativeDir, "libxray.so")
-
-        if (!xrayBinary.exists()) {
-            lastErrorLog = "فایل هسته libxray.so یافت نشد!"
-            return@withContext false
-        }
-
-        xrayBinary.setExecutable(true)
-
-        val configFile = File(context.filesDir, "active_config.json")
-        val jsonContent = CoreConfigGenerator.buildXrayJson(config)
-        configFile.writeText(jsonContent, Charsets.UTF_8)
-
         try {
-            val pb = ProcessBuilder(
-                xrayBinary.absolutePath,
-                "run",
-                "-c",
-                configFile.absolutePath
-            )
+            val resolvedIp = resolveHostToIp(config.host.removeSurrounding("[", "]"))
+            val nativeDir = context.applicationInfo.nativeLibraryDir
+
+            val isHysteria2 = config.protocol.equals("hy2", ignoreCase = true) ||
+                config.rawConfig.startsWith("hy2://", ignoreCase = true) ||
+                config.rawConfig.startsWith("hysteria2://", ignoreCase = true)
+
+            val pb = if (isHysteria2) {
+                val hyBinary = File(nativeDir, "libhysteria.so")
+                if (!hyBinary.exists()) {
+                    lastErrorLog = "فایل هسته libhysteria.so یافت نشد!"
+                    return@withContext false
+                }
+                hyBinary.setExecutable(true)
+                val configFile = File(context.filesDir, "active_hy2.json")
+                configFile.writeText(CoreConfigGenerator.buildHysteria2Json(config, resolvedIp), Charsets.UTF_8)
+
+                ProcessBuilder(
+                    hyBinary.absolutePath,
+                    "client",
+                    "-c",
+                    configFile.absolutePath
+                )
+            } else {
+                val xrayBinary = File(nativeDir, "libxray.so")
+                if (!xrayBinary.exists()) {
+                    lastErrorLog = "فایل هسته libxray.so یافت نشد!"
+                    return@withContext false
+                }
+                xrayBinary.setExecutable(true)
+                val configFile = File(context.filesDir, "active_xray.json")
+                configFile.writeText(CoreConfigGenerator.buildXrayJson(config, resolvedIp), Charsets.UTF_8)
+
+                ProcessBuilder(
+                    xrayBinary.absolutePath,
+                    "run",
+                    "-c",
+                    configFile.absolutePath
+                ).apply {
+                    environment()["XRAY_LOCATION_ASSET"] = nativeDir
+                }
+            }
+
             pb.directory(context.filesDir)
             pb.redirectErrorStream(true)
             coreProcess = pb.start()
 
-            // صبر کوتاه برای بالا آمدن پورت‌های لوکال 10808 و 10809
-            repeat(12) {
+            // صبر برای بالا آمدن پورت‌های لوکال 10808 و 10809
+            repeat(15) {
                 delay(200L)
                 if (isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT)) {
                     return@withContext true
                 }
+                val exitVal = try { coreProcess?.exitValue() } catch (_: Exception) { null }
+                if (exitVal != null) break
             }
 
             val exitVal = try { coreProcess?.exitValue() } catch (_: Exception) { null }
             if (exitVal != null) {
-                val out = coreProcess?.inputStream?.bufferedReader()?.readText()?.take(200) ?: ""
-                lastErrorLog = "هسته متوقف شد: $out"
+                val out = coreProcess?.inputStream?.bufferedReader()?.readText()?.take(220) ?: ""
+                lastErrorLog = "خطای هسته: $out"
                 return@withContext false
             }
             true
         } catch (e: Exception) {
-            lastErrorLog = "خطا در اجرای هسته: ${e.message}"
+            lastErrorLog = "خطا در آماده‌سازی کانفیگ: ${e.message}"
             false
         }
+    }
+
+    // تبدیل دامنه سرور به IP برای دور زدن مشکل نبود /etc/resolv.conf در اندروید
+    private fun resolveHostToIp(host: String): String {
+        // اگر خودش IP است مستقیم برگردان
+        if (host.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) || host.contains(":")) {
+            return host
+        }
+        // اول تلاش با DNS سیستم اندروید
+        try {
+            val ip = InetAddress.getByName(host).hostAddress
+            if (!ip.isNullOrBlank() && !ip.startsWith("10.") && !ip.startsWith("127.")) {
+                return ip
+            }
+        } catch (_: Exception) {
+        }
+        // دوم تلاش با DoH کلودفلر در صورت فیلتر بودن DNS دامنه سرور
+        try {
+            val req = Request.Builder()
+                .url("https://1.1.1.1/dns-query?name=$host&type=A")
+                .header("Accept", "application/dns-json")
+                .build()
+            dohResolveClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: return host
+                val answers = JSONObject(body).optJSONArray("Answer") ?: return host
+                for (i in 0 until answers.length()) {
+                    val item = answers.getJSONObject(i)
+                    if (item.optInt("type") == 1) {
+                        val data = item.optString("data", "")
+                        if (data.isNotBlank()) return data
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return host
     }
 
     fun stopCore() {
@@ -101,14 +169,14 @@ object CoreEngineRunner {
         }
     }
 
-    // تست واقعی اینترنت از داخل پروکسی هسته (پورت 10809)
+    // تست واقعی اینترنت از داخل تونل پروکسی
     suspend fun measureRealTunnelDelay(): Long = withContext(Dispatchers.IO) {
         try {
             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT))
             val client = OkHttpClient.Builder()
                 .proxy(proxy)
-                .connectTimeout(6, TimeUnit.SECONDS)
-                .readTimeout(6, TimeUnit.SECONDS)
+                .connectTimeout(7, TimeUnit.SECONDS)
+                .readTimeout(7, TimeUnit.SECONDS)
                 .build()
 
             val start = System.currentTimeMillis()
