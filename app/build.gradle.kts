@@ -14,8 +14,8 @@ android {
         applicationId = "com.multivpn.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = runNumber + 600
-        versionName = "2.1.$runNumber"
+        versionCode = runNumber + 700
+        versionName = "2.2.$runNumber"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

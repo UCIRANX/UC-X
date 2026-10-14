@@ -48,13 +48,7 @@ object CoreEngineRunner {
                 hyBinary.setExecutable(true)
                 val configFile = File(context.filesDir, "active_hy2.json")
                 configFile.writeText(CoreConfigGenerator.buildHysteria2Json(config, resolvedIp), Charsets.UTF_8)
-
-                ProcessBuilder(
-                    hyBinary.absolutePath,
-                    "client",
-                    "-c",
-                    configFile.absolutePath
-                )
+                ProcessBuilder(hyBinary.absolutePath, "client", "-c", configFile.absolutePath)
             } else {
                 val xrayBinary = File(nativeDir, "libxray.so")
                 if (!xrayBinary.exists()) {
@@ -64,13 +58,7 @@ object CoreEngineRunner {
                 xrayBinary.setExecutable(true)
                 val configFile = File(context.filesDir, "active_xray.json")
                 configFile.writeText(CoreConfigGenerator.buildXrayJson(config, resolvedIp), Charsets.UTF_8)
-
-                ProcessBuilder(
-                    xrayBinary.absolutePath,
-                    "run",
-                    "-c",
-                    configFile.absolutePath
-                ).apply {
+                ProcessBuilder(xrayBinary.absolutePath, "run", "-c", configFile.absolutePath).apply {
                     environment()["XRAY_LOCATION_ASSET"] = nativeDir
                 }
             }
@@ -79,7 +67,6 @@ object CoreEngineRunner {
             pb.redirectErrorStream(true)
             coreProcess = pb.start()
 
-            // صبر برای بالا آمدن پورت‌های لوکال 10808 و 10809
             repeat(15) {
                 delay(200L)
                 if (isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT)) {
@@ -102,21 +89,12 @@ object CoreEngineRunner {
         }
     }
 
-    // تبدیل دامنه سرور به IP برای دور زدن مشکل نبود /etc/resolv.conf در اندروید
     private fun resolveHostToIp(host: String): String {
-        // اگر خودش IP است مستقیم برگردان
-        if (host.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) || host.contains(":")) {
-            return host
-        }
-        // اول تلاش با DNS سیستم اندروید
+        if (host.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) || host.contains(":")) return host
         try {
             val ip = InetAddress.getByName(host).hostAddress
-            if (!ip.isNullOrBlank() && !ip.startsWith("10.") && !ip.startsWith("127.")) {
-                return ip
-            }
-        } catch (_: Exception) {
-        }
-        // دوم تلاش با DoH کلودفلر در صورت فیلتر بودن DNS دامنه سرور
+            if (!ip.isNullOrBlank() && !ip.startsWith("10.") && !ip.startsWith("127.")) return ip
+        } catch (_: Exception) {}
         try {
             val req = Request.Builder()
                 .url("https://1.1.1.1/dns-query?name=$host&type=A")
@@ -133,8 +111,7 @@ object CoreEngineRunner {
                     }
                 }
             }
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
         return host
     }
 
@@ -169,7 +146,6 @@ object CoreEngineRunner {
         }
     }
 
-    // تست واقعی اینترنت از داخل تونل پروکسی
     suspend fun measureRealTunnelDelay(): Long = withContext(Dispatchers.IO) {
         try {
             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT))
@@ -178,12 +154,8 @@ object CoreEngineRunner {
                 .connectTimeout(7, TimeUnit.SECONDS)
                 .readTimeout(7, TimeUnit.SECONDS)
                 .build()
-
             val start = System.currentTimeMillis()
-            val req = Request.Builder()
-                .url("http://cp.cloudflare.com/generate_204")
-                .build()
-
+            val req = Request.Builder().url("http://cp.cloudflare.com/generate_204").build()
             client.newCall(req).execute().use { resp ->
                 if (resp.code == 204 || resp.isSuccessful) {
                     val elapsed = System.currentTimeMillis() - start

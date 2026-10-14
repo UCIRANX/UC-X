@@ -21,9 +21,9 @@ data class VpnConfig(
 object SubManager {
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    // آدرس ساب‌لینک خودت را اینجا قرار بده
+    // <<< آدرس ساب‌لینک خودت را اینجا بگذار >>>
     private val SUBSCRIPTION_URLS = listOf(
-        "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
     )
 
     fun loadCachedConfigs(context: Context): List<VpnConfig> {
@@ -31,7 +31,6 @@ object SubManager {
         return if (!cached.isNullOrBlank()) parseRawSubscription(cached) else emptyList()
     }
 
-    // نگه‌داشتن نام قبلی تابع برای جلوگیری از هرگونه خطای کامپایل در MainActivity
     fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> = loadCachedConfigs(context)
 
     suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {

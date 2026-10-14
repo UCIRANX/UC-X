@@ -10,7 +10,6 @@ object CoreConfigGenerator {
     const val LOCAL_SOCKS_PORT = 10808
     const val LOCAL_HTTP_PORT = 10809
 
-    // ساخت کانفیگ استاندارد برای پروتکل Hysteria2 (hy2://)
     fun buildHysteria2Json(config: VpnConfig, resolvedHostIp: String): String {
         val raw = config.rawConfig.trim()
         val withoutScheme = raw.substringAfter("://").substringBefore("#")
@@ -49,20 +48,11 @@ object CoreConfigGenerator {
         }.toString(2)
     }
 
-    // ساخت کانفیگ استاندارد Xray برای VLESS, SS, VMess, Trojan
     fun buildXrayJson(config: VpnConfig, resolvedHostIp: String): String {
         val root = JSONObject()
-
-        root.put("log", JSONObject().apply {
-            put("loglevel", "warning")
-        })
-
-        // تنظیم DNS داخلی برای جلوگیری از خطای نبود /etc/resolv.conf در اندروید
+        root.put("log", JSONObject().apply { put("loglevel", "warning") })
         root.put("dns", JSONObject().apply {
-            put("servers", JSONArray().apply {
-                put("1.1.1.1")
-                put("8.8.8.8")
-            })
+            put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
         })
 
         val inbounds = JSONArray()
@@ -101,7 +91,6 @@ object CoreConfigGenerator {
             put("protocol", "freedom")
         })
         root.put("outbounds", outbounds)
-
         return root.toString(2)
     }
 
@@ -112,16 +101,14 @@ object CoreConfigGenerator {
             raw.startsWith("ss://", ignoreCase = true) -> parseShadowsocksOutbound(raw, resolvedHostIp)
             raw.startsWith("vmess://", ignoreCase = true) -> parseVmessOutbound(raw, resolvedHostIp)
             raw.startsWith("trojan://", ignoreCase = true) -> parseTrojanOutbound(raw, config.host, config.port, resolvedHostIp)
-            else -> throw Exception("پروتکل ${config.protocol} در این هسته پشتیبانی نمی‌شود")
+            else -> throw Exception("پروتکل ${config.protocol} پشتیبانی نمی‌شود")
         }
     }
 
     private fun parseVlessOutbound(raw: String, originalHost: String, port: Int, resolvedHostIp: String): JSONObject {
         val withoutScheme = raw.substringAfter("://").substringBefore("#")
         val uuid = urlDecode(withoutScheme.substringBefore("@").trim())
-        val queryPart = withoutScheme.substringAfter("?", "")
-        val params = parseQueryParams(queryPart)
-
+        val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
         val encryption = params["encryption"]?.ifBlank { "none" } ?: "none"
         val net = (params["type"] ?: "tcp").lowercase()
         val flow = params["flow"] ?: ""
@@ -133,19 +120,15 @@ object CoreConfigGenerator {
                 put("flow", flow)
             }
         }
-
         val vnextObj = JSONObject().apply {
             put("address", resolvedHostIp)
             put("port", port)
             put("users", JSONArray().put(userObj))
         }
-
         return JSONObject().apply {
             put("tag", "proxy")
             put("protocol", "vless")
-            put("settings", JSONObject().apply {
-                put("vnext", JSONArray().put(vnextObj))
-            })
+            put("settings", JSONObject().apply { put("vnext", JSONArray().put(vnextObj)) })
             put("streamSettings", buildStreamSettings(params, originalHost))
         }
     }
@@ -153,41 +136,31 @@ object CoreConfigGenerator {
     private fun parseTrojanOutbound(raw: String, originalHost: String, port: Int, resolvedHostIp: String): JSONObject {
         val withoutScheme = raw.substringAfter("://").substringBefore("#")
         val password = urlDecode(withoutScheme.substringBefore("@").trim())
-        val queryPart = withoutScheme.substringAfter("?", "")
-        val params = parseQueryParams(queryPart)
-
+        val params = parseQueryParams(withoutScheme.substringAfter("?", ""))
         val serverObj = JSONObject().apply {
             put("address", resolvedHostIp)
             put("port", port)
             put("password", password)
         }
-
         return JSONObject().apply {
             put("tag", "proxy")
             put("protocol", "trojan")
-            put("settings", JSONObject().apply {
-                put("servers", JSONArray().put(serverObj))
-            })
+            put("settings", JSONObject().apply { put("servers", JSONArray().put(serverObj)) })
             put("streamSettings", buildStreamSettings(params, originalHost, defaultSecurity = "tls"))
         }
     }
 
     private fun parseShadowsocksOutbound(raw: String, resolvedHostIp: String): JSONObject {
         val withoutScheme = raw.substringAfter("://").substringBefore("#").substringBefore("?")
-        var method = "aes-256-gcm"
-        var password = ""
-        var port = 443
+        val method: String
+        val password: String
+        val port: Int
 
         if (withoutScheme.contains("@")) {
             val rawUser = urlDecode(withoutScheme.substringBeforeLast("@").trim())
             val hostPort = withoutScheme.substringAfterLast("@").substringBefore("/")
             port = hostPort.substringAfterLast(":", "443").toIntOrNull() ?: 443
-
-            val decodedUser = if (rawUser.contains(":")) {
-                rawUser
-            } else {
-                decodeBase64Safe(rawUser)
-            }
+            val decodedUser = if (rawUser.contains(":")) rawUser else decodeBase64Safe(rawUser)
             method = decodedUser.substringBefore(":").trim()
             password = decodedUser.substringAfter(":").trim()
         } else {
@@ -205,21 +178,16 @@ object CoreConfigGenerator {
             put("method", method)
             put("password", password)
         }
-
         return JSONObject().apply {
             put("tag", "proxy")
             put("protocol", "shadowsocks")
-            put("settings", JSONObject().apply {
-                put("servers", JSONArray().put(serverObj))
-            })
+            put("settings", JSONObject().apply { put("servers", JSONArray().put(serverObj)) })
         }
     }
 
     private fun parseVmessOutbound(raw: String, resolvedHostIp: String): JSONObject {
         val b64 = raw.substringAfter("://").trim()
-        val jsonStr = decodeBase64Safe(b64)
-        val j = JSONObject(jsonStr)
-
+        val j = JSONObject(decodeBase64Safe(b64))
         val originalHost = j.optString("add", "").trim()
         val port = j.optString("port", "443").toIntOrNull() ?: j.optInt("port", 443)
         val id = j.optString("id", "").trim()
@@ -236,14 +204,12 @@ object CoreConfigGenerator {
             put("alterId", aid)
             put("security", scy)
         }
-
         val vnextObj = JSONObject().apply {
             put("address", resolvedHostIp)
             put("port", port)
             put("users", JSONArray().put(userObj))
         }
-
-        val params = mutableMapOf(
+        val params = mapOf(
             "type" to net,
             "security" to if (tls == "tls") "tls" else "none",
             "sni" to sni,
@@ -251,13 +217,10 @@ object CoreConfigGenerator {
             "path" to path,
             "serviceName" to path.removePrefix("/")
         )
-
         return JSONObject().apply {
             put("tag", "proxy")
             put("protocol", "vmess")
-            put("settings", JSONObject().apply {
-                put("vnext", JSONArray().put(vnextObj))
-            })
+            put("settings", JSONObject().apply { put("vnext", JSONArray().put(vnextObj)) })
             put("streamSettings", buildStreamSettings(params, originalHost))
         }
     }
@@ -271,7 +234,6 @@ object CoreConfigGenerator {
             "grpc", "gun" -> "grpc"
             else -> "tcp"
         }
-
         val security = (params["security"] ?: defaultSecurity).lowercase()
         val sni = params["sni"]?.ifBlank { null } ?: params["host"]?.ifBlank { null } ?: originalHost
         val fp = params["fp"]?.ifBlank { "chrome" } ?: "chrome"
@@ -286,7 +248,6 @@ object CoreConfigGenerator {
         return JSONObject().apply {
             put("network", net)
             put("security", security)
-
             if (security == "tls") {
                 put("tlsSettings", JSONObject().apply {
                     put("serverName", sni)
@@ -302,47 +263,30 @@ object CoreConfigGenerator {
                     put("spiderX", spx)
                 })
             }
-
             when (net) {
-                "ws" -> {
-                    put("wsSettings", JSONObject().apply {
-                        put("path", path)
-                        put("headers", JSONObject().apply {
-                            put("Host", wsHost)
-                        })
-                    })
-                }
-                "httpupgrade" -> {
-                    put("httpupgradeSettings", JSONObject().apply {
-                        put("path", path)
-                        put("host", wsHost)
-                    })
-                }
-                "splithttp" -> {
-                    put("splithttpSettings", JSONObject().apply {
-                        put("path", path)
-                        put("host", wsHost)
-                    })
-                }
-                "grpc" -> {
-                    put("grpcSettings", JSONObject().apply {
-                        put("serviceName", serviceName)
-                    })
-                }
-                "tcp" -> {
-                    if (headerType.equals("http", ignoreCase = true)) {
-                        put("tcpSettings", JSONObject().apply {
-                            put("header", JSONObject().apply {
-                                put("type", "http")
-                                put("request", JSONObject().apply {
-                                    put("path", JSONArray().put(path))
-                                    put("headers", JSONObject().apply {
-                                        put("Host", JSONArray().put(wsHost))
-                                    })
-                                })
+                "ws" -> put("wsSettings", JSONObject().apply {
+                    put("path", path)
+                    put("headers", JSONObject().apply { put("Host", wsHost) })
+                })
+                "httpupgrade" -> put("httpupgradeSettings", JSONObject().apply {
+                    put("path", path)
+                    put("host", wsHost)
+                })
+                "splithttp" -> put("splithttpSettings", JSONObject().apply {
+                    put("path", path)
+                    put("host", wsHost)
+                })
+                "grpc" -> put("grpcSettings", JSONObject().apply { put("serviceName", serviceName) })
+                "tcp" -> if (headerType.equals("http", ignoreCase = true)) {
+                    put("tcpSettings", JSONObject().apply {
+                        put("header", JSONObject().apply {
+                            put("type", "http")
+                            put("request", JSONObject().apply {
+                                put("path", JSONArray().put(path))
+                                put("headers", JSONObject().apply { put("Host", JSONArray().put(wsHost)) })
                             })
                         })
-                    }
+                    })
                 }
             }
         }
@@ -353,20 +297,12 @@ object CoreConfigGenerator {
         if (query.isBlank()) return map
         for (pair in query.split("&")) {
             if (pair.isBlank()) continue
-            val key = urlDecode(pair.substringBefore("="))
-            val value = urlDecode(pair.substringAfter("=", ""))
-            map[key] = value
+            map[urlDecode(pair.substringBefore("="))] = urlDecode(pair.substringAfter("=", ""))
         }
         return map
     }
 
-    private fun urlDecode(str: String): String {
-        return try {
-            URLDecoder.decode(str, "UTF-8")
-        } catch (_: Exception) {
-            str
-        }
-    }
+    private fun urlDecode(str: String): String = try { URLDecoder.decode(str, "UTF-8") } catch (_: Exception) { str }
 
     private fun decodeBase64Safe(input: String): String {
         val clean = input.filterNot { it.isWhitespace() }

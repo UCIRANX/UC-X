@@ -39,7 +39,6 @@ import com.multivpn.app.sub.PingTester
 import com.multivpn.app.sub.SubManager
 import com.multivpn.app.sub.VpnConfig
 import kotlinx.coroutines.*
-import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,7 +81,6 @@ fun SinglePageVpnScreen() {
     }
     var expandCoreMenu by remember { mutableStateOf(false) }
 
-    // حذف کامل Auto (Smart) طبق درخواست شما
     val cores = listOf(
         "Sing-box (Xray)",
         "AmneziaWG",
@@ -104,7 +102,7 @@ fun SinglePageVpnScreen() {
     fun connectToSelectedConfig() {
         val target = selectedConfig ?: filteredConfigs.firstOrNull()
         if (target == null) {
-            statusText = "کانفیگی در این هسته وجود ندارد! ابتدا ساب‌لینک را آپدیت کنید."
+            statusText = "کانفیگی وجود ندارد! ابتدا ساب‌لینک را بروزرسانی کنید."
             return
         }
         scope.launch {
@@ -120,12 +118,11 @@ fun SinglePageVpnScreen() {
                 context.startService(serviceIntent)
                 isConnected = true
 
-                // بررسی خودکار اینترنت تونل بلافاصله بعد از اتصال
                 val tunnelPing = CoreEngineRunner.measureRealTunnelDelay()
                 statusText = if (tunnelPing > 0) {
                     "✅ متصل و فعال (پینگ تونل: $tunnelPing ms)"
                 } else {
-                    "⚠️ هسته وصل شد اما این سرور پاسخ نداد (کانفیگ دیگری انتخاب کنید)"
+                    "⚠️ هسته روشن شد اما این سرور پاسخ نداد (کانفیگ دیگری انتخاب کنید)"
                 }
             } else {
                 isConnected = false
@@ -470,7 +467,6 @@ fun SinglePageVpnScreen() {
 class MultiCoreVpnService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var vpnInterface: ParcelFileDescriptor? = null
-    private var tun2socksProcess: Process? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val coreName = intent?.getStringExtra("CORE_NAME") ?: "Sing-box (Xray)"
@@ -485,7 +481,7 @@ class MultiCoreVpnService : VpnService() {
 
     private fun establishTunnel(serverName: String) {
         try {
-            stopTunnelOnly()
+            vpnInterface?.close()
             val builder = Builder()
                 .setSession("MultiCoreVPN - $serverName")
                 .setMtu(1500)
@@ -493,13 +489,11 @@ class MultiCoreVpnService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
 
-            // جلوگیری از افتادن خود برنامه داخل حلقه VPN
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (_: Exception) {
             }
 
-            // تنظیم پروکسی سطح سیستم روی پورت 10809 هسته
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(
                     ProxyInfo.buildDirectProxy("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT)
@@ -549,19 +543,13 @@ class MultiCoreVpnService : VpnService() {
         }
     }
 
-    private fun stopTunnelOnly() {
+    private fun stopTunnel() {
         try {
-            tun2socksProcess?.destroy()
-            tun2socksProcess = null
+            CoreEngineRunner.stopCore()
             vpnInterface?.close()
             vpnInterface = null
         } catch (_: Exception) {
         }
-    }
-
-    private fun stopTunnel() {
-        CoreEngineRunner.stopCore()
-        stopTunnelOnly()
     }
 
     private fun sendExpirationNotification() {

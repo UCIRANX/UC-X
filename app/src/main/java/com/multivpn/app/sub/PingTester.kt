@@ -17,7 +17,7 @@ object PingTester {
         try {
             val start = System.currentTimeMillis()
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(host, port), timeoutMs)
+                socket.connect(InetSocketAddress(host.removeSurrounding("[", "]"), port), timeoutMs)
             }
             val elapsed = System.currentTimeMillis() - start
             if (elapsed <= 0L) 1L else elapsed
