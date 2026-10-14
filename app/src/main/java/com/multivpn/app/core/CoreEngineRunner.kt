@@ -67,9 +67,10 @@ object CoreEngineRunner {
             pb.redirectErrorStream(true)
             coreProcess = pb.start()
 
-            for (i in 0 until 15) {
+            for (i in 0 until 20) {
                 delay(200L)
                 if (isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT)) {
+                    delay(400L) // فرصت کوتاه برای تکمیل راه‌اندازی پورت HTTP
                     return@withContext true
                 }
                 val exitVal = try { coreProcess?.exitValue() } catch (_: Exception) { null }
@@ -78,8 +79,11 @@ object CoreEngineRunner {
 
             val exitVal = try { coreProcess?.exitValue() } catch (_: Exception) { null }
             if (exitVal != null) {
-                val out = coreProcess?.inputStream?.bufferedReader()?.readText()?.take(220) ?: ""
-                lastErrorLog = "خطای هسته: $out"
+                val fullOut = coreProcess?.inputStream?.bufferedReader()?.readText()?.trim() ?: ""
+                val cleanErr = fullOut.lines().filterNot {
+                    it.contains("Xray ") || it.contains("unified platform") || it.contains("Reading config:")
+                }.joinToString(" ").takeLast(220)
+                lastErrorLog = "خطای هسته: ${cleanErr.ifBlank { fullOut.takeLast(200) }}"
                 return@withContext false
             }
             true
@@ -147,24 +151,30 @@ object CoreEngineRunner {
     }
 
     suspend fun measureRealTunnelDelay(): Long = withContext(Dispatchers.IO) {
-        try {
-            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT))
-            val client = OkHttpClient.Builder()
-                .proxy(proxy)
-                .connectTimeout(7, TimeUnit.SECONDS)
-                .readTimeout(7, TimeUnit.SECONDS)
-                .build()
-            val start = System.currentTimeMillis()
-            val req = Request.Builder().url("http://cp.cloudflare.com/generate_204").build()
-            client.newCall(req).execute().use { resp ->
-                if (resp.code == 204 || resp.isSuccessful) {
-                    val elapsed = System.currentTimeMillis() - start
-                    return@withContext if (elapsed <= 0L) 1L else elapsed
+        val testUrls = listOf(
+            "http://www.gstatic.com/generate_204",
+            "http://cp.cloudflare.com/generate_204"
+        )
+        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", CoreConfigGenerator.LOCAL_HTTP_PORT))
+        val client = OkHttpClient.Builder()
+            .proxy(proxy)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .build()
+
+        for (url in testUrls) {
+            try {
+                val start = System.currentTimeMillis()
+                val req = Request.Builder().url(url).build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.code == 204 || resp.isSuccessful) {
+                        val elapsed = System.currentTimeMillis() - start
+                        return@withContext if (elapsed <= 0L) 1L else elapsed
+                    }
                 }
+            } catch (_: Exception) {
             }
-            -1L
-        } catch (e: Exception) {
-            -1L
         }
+        -1L
     }
 }
