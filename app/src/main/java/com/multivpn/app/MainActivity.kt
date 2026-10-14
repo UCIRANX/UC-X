@@ -72,8 +72,6 @@ fun SinglePageVpnScreen() {
     var isBusy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf("آماده اتصال (${configs.size} کانفیگ آماده)") }
     var expandCoreMenu by remember { mutableStateOf(false) }
-    var showSubDialog by remember { mutableStateOf(false) }
-    var subUrlInput by remember { mutableStateOf(SubManager.getSubUrl(context)) }
 
     val cores = listOf(
         "Auto (Smart)",
@@ -129,39 +127,6 @@ fun SinglePageVpnScreen() {
             }
             delay(1000L)
         }
-    }
-
-    if (showSubDialog) {
-        AlertDialog(
-            onDismissRequest = { showSubDialog = false },
-            title = { Text("تنظیم آدرس ساب‌لینک ترکیبی", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("لینک ساب‌اسکریپشن خود را وارد کنید (پشتیبانی از DoH ضد فیلتر):")
-                    OutlinedTextField(
-                        value = subUrlInput,
-                        onValueChange = { subUrlInput = it },
-                        label = { Text("https://...") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    SubManager.setSubUrl(context, subUrlInput)
-                    showSubDialog = false
-                    Toast.makeText(context, "آدرس ساب‌لینک ذخیره شد", Toast.LENGTH_SHORT).show()
-                }) {
-                    Text("ذخیره")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSubDialog = false }) {
-                    Text("انصراف")
-                }
-            }
-        )
     }
 
     if (showLicenseDialog) {
@@ -330,14 +295,15 @@ fun SinglePageVpnScreen() {
                     best.pingMs == -2L -> "Timeout"
                     else -> "تست نشده"
                 }
-                Text(text = "سرور انتخابی: ${best.name} ($pingStr)")
+                Text(text = "کانفیگ انتخابی: ${best.name} ($pingStr)")
             }
         }
 
+        // لیست انتخاب کانفیگ
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(140.dp)
+                .height(150.dp)
         ) {
             LazyColumn(modifier = Modifier.padding(8.dp)) {
                 items(filteredConfigs) { cfg ->
@@ -366,6 +332,7 @@ fun SinglePageVpnScreen() {
             }
         }
 
+        // دکمه‌های کنترل پایین صفحه (بدون دکمه وارد کردن دستی ساب‌لینک)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -375,7 +342,7 @@ fun SinglePageVpnScreen() {
                     onClick = { expandCoreMenu = true },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("هسته فعال: $selectedCore (${filteredConfigs.size} سرور)")
+                    Text("هسته فعال: $selectedCore (${filteredConfigs.size} کانفیگ)")
                 }
                 DropdownMenu(
                     expanded = expandCoreMenu,
@@ -397,7 +364,7 @@ fun SinglePageVpnScreen() {
                 onClick = {
                     scope.launch {
                         isBusy = true
-                        statusText = "در حال تست پینگ موازی ${configs.size} سرور..."
+                        statusText = "در حال تست پینگ موازی ${configs.size} کانفیگ..."
                         val tested = PingTester.pingAllConfigs(configs)
                         configs = tested
                         val bestValid = tested.firstOrNull {
@@ -405,7 +372,7 @@ fun SinglePageVpnScreen() {
                         }
                         if (bestValid != null) {
                             selectedConfig = bestValid
-                            statusText = "بهترین سرور: ${bestValid.name} (${bestValid.pingMs} ms)"
+                            statusText = "سریع‌ترین کانفیگ: ${bestValid.name} (${bestValid.pingMs} ms)"
                         } else {
                             statusText = "تست پینگ تمام شد."
                         }
@@ -415,44 +382,29 @@ fun SinglePageVpnScreen() {
                 enabled = !isBusy,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("تست پینگ و انتخاب سریع‌ترین سرور")
+                Text("تست پینگ")
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            isBusy = true
-                            statusText = "دریافت ساب‌لینک با DoH ضد فیلتر..."
-                            try {
-                                val fetched = SubManager.fetchAndParseSub(context)
-                                configs = fetched
-                                selectedConfig = fetched.firstOrNull()
-                                statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
-                            } catch (e: Exception) {
-                                statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
-                            }
-                            isBusy = false
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        isBusy = true
+                        statusText = "در حال بروزرسانی ساب‌لینک‌ها با DoH..."
+                        try {
+                            val fetched = SubManager.fetchAndParseSub(context)
+                            configs = fetched
+                            selectedConfig = fetched.firstOrNull()
+                            statusText = "بروزرسانی موفق: ${fetched.size} کانفیگ دریافت شد!"
+                        } catch (e: Exception) {
+                            statusText = "خطا در آپدیت ساب‌لینک: ${e.message}"
                         }
-                    },
-                    enabled = !isBusy,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("بروزرسانی ساب‌لینک")
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        subUrlInput = SubManager.getSubUrl(context)
-                        showSubDialog = true
-                    },
-                    enabled = !isBusy
-                ) {
-                    Text("آدرس ساب")
-                }
+                        isBusy = false
+                    }
+                },
+                enabled = !isBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("بروزرسانی ساب‌لینک‌ها")
             }
         }
     }

@@ -14,8 +14,8 @@ android {
         applicationId = "com.multivpn.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = runNumber + 200
-        versionName = "1.4.$runNumber"
+        versionCode = runNumber + 300
+        versionName = "1.5.$runNumber"
     }
 
     signingConfigs {

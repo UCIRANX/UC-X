@@ -32,7 +32,7 @@ object DohClient {
     suspend fun fetchUrlText(url: String): String = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "MultiCoreVPN/1.4 (Android; Sing-box; ClashMeta)")
+            .header("User-Agent", "MultiCoreVPN/1.5 (Android; Sing-box; ClashMeta)")
             .build()
 
         try {

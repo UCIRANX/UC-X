@@ -20,18 +20,12 @@ data class VpnConfig(
 )
 
 object SubManager {
-    private const val KEY_SUB_URL = "saved_sub_url"
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    const val DEFAULT_SUB_URL = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
-
-    fun getSubUrl(context: Context): String {
-        return TimeGuard.getSecurePrefs(context).getString(KEY_SUB_URL, DEFAULT_SUB_URL) ?: DEFAULT_SUB_URL
-    }
-
-    fun setSubUrl(context: Context, url: String) {
-        TimeGuard.getSecurePrefs(context).edit().putString(KEY_SUB_URL, url.trim()).apply()
-    }
+    // آدرس‌های ساب‌لینک مخفی شما (کاربر در برنامه قادر به دیدن یا تغییر آن‌ها نیست)
+    private val SUBSCRIPTION_URLS = listOf(
+        "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt"
+    )
 
     fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> {
         val cached = TimeGuard.getSecurePrefs(context).getString(KEY_CACHED_RAW_SUB, null)
@@ -40,11 +34,21 @@ object SubManager {
     }
 
     suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
-        val url = getSubUrl(context)
-        val rawText = DohClient.fetchUrlText(url)
-        val configs = parseRawSubscription(rawText)
+        val combinedRaw = StringBuilder()
+        for (url in SUBSCRIPTION_URLS) {
+            try {
+                val text = DohClient.fetchUrlText(url)
+                combinedRaw.append(text).append("\n")
+            } catch (_: Exception) {
+            }
+        }
+        val finalRaw = combinedRaw.toString()
+        if (finalRaw.isBlank()) {
+            throw Exception("عدم دسترسی به سرور ساب‌لینک")
+        }
+        val configs = parseRawSubscription(finalRaw)
         if (configs.isNotEmpty()) {
-            TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, rawText).apply()
+            TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, finalRaw).apply()
         }
         return if (configs.isNotEmpty()) configs else getBuiltInStarterConfigs()
     }
