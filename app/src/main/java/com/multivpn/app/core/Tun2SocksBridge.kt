@@ -1,83 +1,91 @@
 package com.multivpn.app.core
 
 import java.io.File
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 
 object Tun2SocksBridge {
-    @Volatile
-    var lastError: String = ""
+    private const val CLS = "hev.htproxy.TProxyService"
 
-    @Volatile
-    private var active: Boolean = false
-
+    @Volatile var lastError: String = ""
+    @Volatile private var started = false
     private var cls: Class<*>? = null
-    private var startMethod: Method? = null
-    private var stopMethod: Method? = null
-    private var statsMethod: Method? = null
+    private var inst: Any? = null
 
-    private fun ensureLoaded() {
-        if (cls != null) return
-        try {
-            System.loadLibrary("hev-socks5-tunnel")
-        } catch (_: Throwable) {}
+    private fun load(): Class<*>? {
+        cls?.let { return it }
+        return try {
+            Class.forName(CLS).also { cls = it }
+        } catch (t: Throwable) {
+            lastError = "کتابخانه‌ی tun2socks بارگذاری نشد (${t.javaClass.simpleName}: ${t.message})"
+            null
+        }
+    }
 
-        val candidates = listOf(
-            "hev.htproxy.TProxyService",
-            "hev.sockstunnel.TProxyService"
-        )
-        for (name in candidates) {
-            try {
-                val c = Class.forName(name)
-                cls = c
-                startMethod = c.declaredMethods.firstOrNull { it.name.contains("Start", ignoreCase = true) }?.apply { isAccessible = true }
-                stopMethod = c.declaredMethods.firstOrNull { it.name.contains("Stop", ignoreCase = true) }?.apply { isAccessible = true }
-                statsMethod = c.declaredMethods.firstOrNull { it.name.contains("Stats", ignoreCase = true) }?.apply { isAccessible = true }
-                return
-            } catch (_: Throwable) {}
+    fun describe(): String {
+        val c = load() ?: return lastError
+        return c.declaredMethods.joinToString("; ") { m ->
+            (if (Modifier.isStatic(m.modifiers)) "static " else "") +
+                m.returnType.simpleName + " " + m.name + "(" + m.parameterTypes.joinToString { it.simpleName } + ")"
+        }
+    }
+
+    private fun find(name: String): Method? {
+        val c = load() ?: return null
+        return (c.declaredMethods.asList() + c.methods.asList()).firstOrNull { it.name == name }
+            ?.also { it.isAccessible = true }
+    }
+
+    private fun call(m: Method, vararg args: Any?): Any? {
+        val c = load()!!
+        val target: Any? = if (Modifier.isStatic(m.modifiers)) null else {
+            inst ?: c.getDeclaredConstructor().also { it.isAccessible = true }.newInstance().also { inst = it }
+        }
+        return try {
+            m.invoke(target, *args)
+        } catch (e: InvocationTargetException) {
+            throw e.targetException ?: e
         }
     }
 
     @Synchronized
-    fun start(configFile: File, fd: Int): Boolean {
+    fun start(config: File, fd: Int): Boolean {
+        val m = find("TProxyStartService") ?: run {
+            if (cls != null) lastError = "متد TProxyStartService پیدا نشد. متدهای موجود: ${describe()}"
+            return false
+        }
         return try {
-            ensureLoaded()
-            val m = startMethod ?: error("کلاس TProxyService در فایل AAR پیدا نشد")
-            val instance = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) null else cls?.getDeclaredConstructor()?.newInstance()
-            m.invoke(instance, configFile.absolutePath, fd)
-            active = true
-            lastError = ""
-            true
+            val r = call(m, config.absolutePath, fd)
+            started = true
+            if (r is Boolean && !r) {
+                lastError = "TProxyStartService مقدار false برگرداند"
+                started = false
+                false
+            } else true
         } catch (t: Throwable) {
-            val cause = t.cause ?: t
-            lastError = cause.message ?: cause.javaClass.simpleName
-            active = false
+            lastError = "اجرای TProxyStartService ناموفق بود (${t.javaClass.simpleName}: ${t.message})"
+            started = false
             false
         }
     }
 
-    @Synchronized
-    fun stop() {
-        try {
-            ensureLoaded()
-            val m = stopMethod ?: return
-            val instance = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) null else cls?.getDeclaredConstructor()?.newInstance()
-            m.invoke(instance)
-        } catch (_: Throwable) {
-        } finally {
-            active = false
-        }
+    fun isRunning(): Boolean {
+        if (!started) return false
+        val m = find("TProxyIsRunning") ?: return true
+        return runCatching { call(m) as? Boolean }.getOrNull() ?: true
     }
 
-    fun isRunning(): Boolean = active
-
     fun stats(): LongArray {
-        return try {
-            ensureLoaded()
-            val m = statsMethod ?: return LongArray(0)
-            val instance = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) null else cls?.getDeclaredConstructor()?.newInstance()
-            (m.invoke(instance) as? LongArray) ?: LongArray(0)
-        } catch (_: Throwable) {
-            LongArray(0)
-        }
+        if (!started) return longArrayOf()
+        val m = find("TProxyGetStats") ?: return longArrayOf()
+        return runCatching { call(m) as? LongArray }.getOrNull() ?: longArrayOf()
+    }
+
+    @Synchronized
+    fun stop() {
+        if (!started) return
+        find("TProxyStopService")?.let { runCatching { call(it) } }
+        started = false
     }
 }
