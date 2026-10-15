@@ -77,12 +77,7 @@ fun VpnScreen(licenseValid: Boolean) {
         else -> "اتصال"
     }
     val canTap = licenseValid && (!ctl.busy || ctl.connecting || ctl.connected)
-    val sorted = ctl.configs.sortedWith(
-        compareBy<VpnConfig>(
-            { if (it.pingMs > 0) 0 else 1 },
-            { ctl.order[it.id] ?: 0 },
-        )
-    )
+    val sorted = ctl.displayed
     val selected = ctl.selected
 
     Column(

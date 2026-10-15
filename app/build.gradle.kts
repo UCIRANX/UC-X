@@ -20,7 +20,7 @@ android {
         targetSdk = 35
         versionCode = runNumber + 900
         versionName = "3.0.$runNumber"
-        buildConfigField("String", "BRIDGE_REPO", "\"${System.getenv("GITHUB_REPOSITORY") ?: ""}\"")
+        buildConfigField("String", "BRIDGE_REPO", "\"UCIRANX/UC-Tor\"")
 
         ndk {
             abiFilters += listOf("arm64-v8a")

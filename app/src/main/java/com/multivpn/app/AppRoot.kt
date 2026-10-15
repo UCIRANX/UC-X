@@ -50,7 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
-enum class AppMode(val label: String) { VPN("Sing-Box"), TOR("تور") }
+enum class AppMode(val label: String) { VPN("سینگ باکس"), TOR("تور") }
 
 private val TextSub = Color(0xFFB4B4C8)
 
@@ -84,7 +84,7 @@ fun AppRoot() {
     // تور و Sing-Box هر دو VPN سراسری لازم دارند؛ وقتی تور شروع می‌شود Sing-Box قطع می‌شود
     LaunchedEffect(torPhase) {
         if (torPhase == Phase.CONNECTING) {
-            SingBoxController.stop(context, "Sing-Box برای اتصال تور قطع شد")
+            SingBoxController.stop(context, "سینگ باکس برای اتصال تور قطع شد")
         }
     }
 
@@ -149,7 +149,7 @@ private fun ModeSwitch(mode: AppMode, onChange: (AppMode) -> Unit) {
                     color = if (on) Color.White else TextSub,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
-                    style = if (m == AppMode.VPN) LtrStyle else ContentStyle,
+                    style = ContentStyle,
                 )
             }
         }

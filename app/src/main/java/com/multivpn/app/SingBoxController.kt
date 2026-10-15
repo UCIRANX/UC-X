@@ -19,24 +19,26 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * وضعیت و عملیات حالت Sing-Box.
- * داخل یک object است تا با عوض شدن تب (VPN ↔ تور) قطع نشود؛ فقط خود کاربر یا خطای واقعی آن را تغییر می‌دهد.
+ * وضعیت و عملیات حالت سینگ‌باکس.
+ * داخل یک object است تا با عوض شدن تب قطع نشود؛ فقط خود کاربر یا خطای واقعی آن را تغییر می‌دهد.
  */
 object SingBoxController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var connJob: Job? = null
-    private var pingJob: Job? = null
     private var loaded = false
-    private var counter = 0
+    private val pendingPings = LinkedHashMap<String, VpnConfig>()
 
     var configs: List<VpnConfig> by mutableStateOf<List<VpnConfig>>(emptyList())
         private set
-    var selectedId: String? by mutableStateOf<String?>(null)
+
+    /** فهرست نمایشی: سرورهای دارای پینگ بر اساس کمترین پینگ، بقیه به همان ترتیب اصلی. */
+    var displayed: List<VpnConfig> by mutableStateOf<List<VpnConfig>>(emptyList())
         private set
-    /** ترتیب رسیدن پینگ‌های موفق؛ برای نمایش زنده به همان ترتیب. */
-    var order: Map<String, Int> by mutableStateOf<Map<String, Int>>(emptyMap())
+
+    var selectedId: String? by mutableStateOf<String?>(null)
         private set
     var connected: Boolean by mutableStateOf(false)
         private set
@@ -54,10 +56,25 @@ object SingBoxController {
         status = msg
     }
 
+    private fun setConfigs(list: List<VpnConfig>) {
+        configs = list
+        displayed = list.withIndex().sortedWith(
+            compareBy<IndexedValue<VpnConfig>>(
+                { if (it.value.pingMs > 0) 0 else 1 },
+                { if (it.value.pingMs > 0) it.value.pingMs else 0L },
+                { it.index },
+            )
+        ).map { it.value }
+    }
+
+    private fun setPing(id: String, ping: Long) {
+        setConfigs(configs.map { if (it.id == id) it.copy(pingMs = ping) else it })
+    }
+
     fun ensureLoaded(ctx: Context) {
         if (loaded) return
         loaded = true
-        configs = SubManager.loadCachedConfigs(ctx)
+        setConfigs(SubManager.loadCachedConfigs(ctx))
         selectedId = configs.firstOrNull()?.id
         status = if (configs.isEmpty()) "ابتدا سرورها را بروزرسانی کنید" else "آماده اتصال"
         // اگر هسته بیرون از برنامه بسته شود، وضعیت باید درست شود
@@ -87,26 +104,44 @@ object SingBoxController {
         status = message
     }
 
+    /** صبر می‌کند تا پورت‌های هسته قبلی واقعاً آزاد شوند؛ وگرنه اتصال جدید شکست می‌خورد. */
+    private suspend fun awaitPortsFree(timeoutMs: Long = 4000L) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            val inUse = withContext(Dispatchers.IO) {
+                CoreEngineRunner.isLocalPortListening(CoreConfigGenerator.LOCAL_SOCKS_PORT) ||
+                    CoreEngineRunner.isLocalPortListening(CoreConfigGenerator.LOCAL_HTTP_PORT)
+            }
+            if (!inUse) return
+            delay(150L)
+        }
+    }
+
     fun start(ctx: Context, target: VpnConfig? = selected) {
-        val t = target ?: configs.firstOrNull()
-        if (t == null) {
+        val t = target ?: configs.firstOrNull() ?: run {
             status = "سروری برای اتصال وجود ندارد"
             return
         }
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
-        if (connected || connecting) stop(ctx, "در حال تغییر سرور…")
+        val wasActive = connected || connecting
+        if (wasActive) stop(ctx, "در حال تغییر سرور…")
 
         selectedId = t.id
         connecting = true
         status = "در حال اتصال به ${t.name}…"
         connJob = scope.launch {
+            if (wasActive) {
+                // دقیقاً مثل قطع کامل و بعد اتصال: اول تونل قبلی بسته شود
+                delay(400L)
+                awaitPortsFree()
+            }
             val ok = CoreEngineRunner.startCore(ctx, t)
             if (!isActive) {
                 CoreEngineRunner.stopCore()
                 return@launch
             }
             if (!ok) {
-                fail(ctx, t, "سرور وصل نشد: ${CoreEngineRunner.lastErrorLog.ifBlank { "هسته اجرا نشد" }}")
+                fail(ctx, t)
                 return@launch
             }
             val ping = CoreEngineRunner.measureRealTunnelDelay()
@@ -115,7 +150,7 @@ object SingBoxController {
                 return@launch
             }
             if (ping <= 0) {
-                fail(ctx, t, "سرور وصل شد ولی اینترنت از آن عبور نکرد؛ سرور دیگری را امتحان کنید")
+                fail(ctx, t)
                 return@launch
             }
             setPing(t.id, ping)
@@ -131,32 +166,33 @@ object SingBoxController {
         }
     }
 
-    /** انتخاب سرور: اگر وصل هستیم، به سرور جدید وصل می‌شویم؛ وگرنه فقط انتخاب می‌شود. */
+    /** انتخاب سرور: اگر وصل هستیم، همان کار «قطع، انتخاب، اتصال» انجام می‌شود؛ وگرنه فقط انتخاب. */
     fun select(ctx: Context, cfg: VpnConfig) {
-        if (connected || connecting) start(ctx, cfg) else {
+        if (connected || connecting) {
+            start(ctx, cfg)
+        } else {
             selectedId = cfg.id
             status = "${cfg.name} انتخاب شد"
         }
     }
 
-    private fun fail(ctx: Context, t: VpnConfig, msg: String) {
+    private fun fail(ctx: Context, t: VpnConfig) {
         CoreEngineRunner.stopCore()
         ctx.startService(stopIntent(ctx))
         connecting = false
         connected = false
         setPing(t.id, -2L)
-        status = msg
+        status = "سرور وصل نشد، سرور دیگری را امتحان کنید"
     }
 
-    private fun setPing(id: String, ping: Long) {
-        configs = configs.map { if (it.id == id) it.copy(pingMs = ping) else it }
-        if (ping > 0 && !order.containsKey(id)) {
-            counter++
-            order = order + (id to counter)
-        }
+    private fun flushPings() {
+        if (pendingPings.isEmpty()) return
+        val byId = pendingPings.toMap()
+        pendingPings.clear()
+        setConfigs(configs.map { byId[it.id] ?: it })
     }
 
-    /** تست پینگ واقعی؛ نتیجه‌ی هر سرور همان لحظه‌ای که آماده می‌شود نمایش داده می‌شود. */
+    /** تست پینگ واقعی؛ نتایج هر ۳۰۰ میلی‌ثانیه یک‌جا روی فهرست نشست می‌کنند تا لیست روان بماند. */
     fun pingAll(ctx: Context) {
         if (configs.isEmpty()) {
             status = "ابتدا سرورها را بروزرسانی کنید"
@@ -166,14 +202,20 @@ object SingBoxController {
         if (connected || connecting) stop(ctx, "برای تست پینگ، اتصال قطع شد")
 
         busy = true
-        order = emptyMap()
-        counter = 0
         val list = configs
         val total = list.size
         var done = 0
         var found = 0
+        pendingPings.clear()
         status = "شروع تست پینگ برای $total سرور…"
-        pingJob = scope.launch {
+
+        scope.launch {
+            while (busy) {
+                delay(300L)
+                flushPings()
+            }
+        }
+        scope.launch {
             try {
                 PingTester.pingAllConfigsRealHttp(
                     context = ctx,
@@ -183,11 +225,12 @@ object SingBoxController {
                         scope.launch {
                             done++
                             if (cfg.pingMs > 0) found++
-                            setPing(cfg.id, cfg.pingMs)
+                            pendingPings[cfg.id] = cfg
                             status = "در حال تست: $done از $total · $found سرور پاسخ داد"
                         }
                     },
                 )
+                flushPings()
                 status = if (found > 0) "تست تمام شد: $found سرور پاسخ داد" else "هیچ سروری در این لحظه پاسخ نداد"
             } finally {
                 busy = false
@@ -199,12 +242,10 @@ object SingBoxController {
         if (busy) return
         busy = true
         status = "در حال دریافت سرورها از ساب‌لینک…"
-        pingJob = scope.launch {
+        scope.launch {
             try {
                 val fetched = SubManager.fetchAndParseSub(ctx)
-                configs = fetched
-                order = emptyMap()
-                counter = 0
+                setConfigs(fetched)
                 if (fetched.none { it.id == selectedId }) selectedId = fetched.firstOrNull()?.id
                 status = if (fetched.isEmpty()) "سروری در ساب‌لینک پیدا نشد" else "${fetched.size} سرور دریافت شد"
             } catch (e: Exception) {

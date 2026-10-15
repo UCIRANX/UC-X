@@ -188,7 +188,7 @@ object BridgeRepository {
             if (!set.isStale()) break
         }
         if (best != null && bestBody != null && !best.isStale()) {
-            writeCache(cache, bestBody)
+            writeCache(cache, stamp(bestBody))
             invalidate()
             return true
         }
@@ -202,7 +202,7 @@ object BridgeRepository {
             // هیچ منبع تازه‌ای جواب نداد؛ فقط اگر نسخه‌ی ریپو از کش فعلی جدیدتر است ذخیره‌اش کن.
             val bt = best?.updatedAtMs
             if (best != null && bestBody != null && bt != null && bt > (old?.updatedAtMs ?: 0L)) {
-                writeCache(cache, bestBody)
+                writeCache(cache, stamp(bestBody))
                 invalidate()
             }
             return false
@@ -211,6 +211,17 @@ object BridgeRepository {
         invalidate()
         return true
     }
+
+    /** اگر فایل منبع فیلد updated نداشت، زمان دریافت را به‌عنوان زمان بروزرسانی ثبت می‌کنیم. */
+    private fun stamp(body: String): String = runCatching {
+        val o = JSONObject(body)
+        if (o.optString("updated").isBlank()) {
+            o.put("updated", SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.format(Date()) + " UTC")
+        }
+        o.toString()
+    }.getOrDefault(body)
 
     private fun writeCache(cache: File, body: String) {
         // اول در فایل موقت می‌نویسیم تا قطع شدن وسط نوشتن کش را خراب نکند.
