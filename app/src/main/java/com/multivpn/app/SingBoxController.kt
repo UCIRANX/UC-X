@@ -50,7 +50,7 @@ object SingBoxController {
     val selected: VpnConfig?
         get() = configs.firstOrNull { it.id == selectedId }
 
-    fun setStatus(msg: String) {
+    fun reportStatus(msg: String) {
         status = msg
     }
 

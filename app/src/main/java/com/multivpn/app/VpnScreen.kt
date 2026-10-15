@@ -63,7 +63,7 @@ fun VpnScreen(licenseValid: Boolean) {
         ActivityResultContracts.StartActivityForResult()
     ) { res ->
         if (res.resultCode == Activity.RESULT_OK) ctl.start(context)
-        else ctl.setStatus("اجازهٔ VPN داده نشد؛ برای اتصال باید اجازه بدهید")
+        else ctl.reportStatus("اجازهٔ VPN داده نشد؛ برای اتصال باید اجازه بدهید")
     }
 
     val accent = when {
