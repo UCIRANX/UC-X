@@ -16,10 +16,13 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,6 +48,7 @@ import java.io.File
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -79,6 +83,8 @@ fun SinglePageVpnScreen() {
 
     var isConnected by remember { mutableStateOf(CoreEngineRunner.isCoreRunning() || TorEngineRunner.isTorRunning()) }
     var isBusy by remember { mutableStateOf(false) }
+    var isConnecting by remember { mutableStateOf(false) }
+    val connectJob = remember { mutableStateOf<Job?>(null) }
     var statusText by remember {
         mutableStateOf(
             if (configs.isEmpty()) "ابتدا «بروزرسانی ساب‌لینک‌ها» را بزنید یا هسته Tor را انتخاب کنید"
@@ -86,7 +92,7 @@ fun SinglePageVpnScreen() {
         )
     }
 
-    val cores = listOf("Sing-box (Xray)", "Tor", "AmneziaWG", "OpenVPN", "Psiphon")
+    val cores = listOf("Sing-box (Xray)", "Tor")
     val filteredConfigs = remember(configs, selectedCore) {
         configs.filter { it.coreType == selectedCore }
     }
@@ -98,6 +104,9 @@ fun SinglePageVpnScreen() {
     }
 
     fun stopAllConnections() {
+        connectJob.value?.cancel()
+        connectJob.value = null
+        isConnecting = false
         isConnected = false
         CoreEngineRunner.stopCore()
         TorEngineRunner.stopTor()
@@ -105,68 +114,85 @@ fun SinglePageVpnScreen() {
     }
 
     fun startActiveConnection() {
-        scope.launch {
+        connectJob.value?.cancel()
+        connectJob.value = scope.launch {
             isBusy = true
-            if (selectedCore == "Tor") {
-                CoreEngineRunner.stopCore()
-                val ok = TorEngineRunner.startTor(
-                    context = context,
-                    bridgeType = selectedBridge.id,
-                    countryCode = selectedCountry.code,
-                    onStatus = { msg -> statusText = msg }
-                )
-                if (ok) {
-                    val srvIntent = Intent(context, MultiCoreVpnService::class.java).apply {
-                        putExtra("CORE_NAME", "Tor (${selectedBridge.id})")
-                        putExtra("SERVER_NAME", "${selectedCountry.flag} ${selectedCountry.name}")
-                        putExtra("SOCKS_PORT", TorEngineRunner.TOR_SOCKS_PORT)
-                        putExtra("SERVER_PING", -1L)
+            isConnecting = true
+            try {
+                if (selectedCore == "Tor") {
+                    CoreEngineRunner.stopCore()
+                    val ok = TorEngineRunner.startTor(
+                        context = context,
+                        bridgeType = selectedBridge.id,
+                        countryCode = selectedCountry.code,
+                        onStatus = { msg -> statusText = msg }
+                    )
+                    if (!isActive) {
+                        TorEngineRunner.stopTor()
+                        return@launch
                     }
-                    context.startService(srvIntent)
-                    isConnected = true
-                    statusText = "✅ متصل به Tor (پل: ${selectedBridge.id} | کشور: ${selectedCountry.flag} ${selectedCountry.name})"
-                } else {
-                    isConnected = false
-                    statusText = TorEngineRunner.lastError.ifBlank { "خطا در اتصال به شبکه Tor" }
-                }
-            } else {
-                TorEngineRunner.stopTor()
-                val target = selectedConfig ?: filteredConfigs.firstOrNull()
-                if (target == null) {
-                    statusText = "کانفیگی وجود ندارد! ابتدا ساب‌لینک را بروزرسانی کنید."
-                    isBusy = false
-                    return@launch
-                }
-                statusText = "در حال اتصال و تست Real HTTP روی ${target.name}..."
-                val coreStarted = CoreEngineRunner.startCore(context, target)
-                if (coreStarted) {
-                    val realPing = CoreEngineRunner.measureRealTunnelDelay()
-                    if (realPing > 0) {
-                        configs = configs.map { if (it.id == target.id) it.copy(pingMs = realPing) else it }
-                        selectedConfig = target.copy(pingMs = realPing)
-
+                    if (ok) {
                         val srvIntent = Intent(context, MultiCoreVpnService::class.java).apply {
-                            putExtra("CORE_NAME", target.coreType)
-                            putExtra("SERVER_NAME", target.name)
-                            putExtra("SOCKS_PORT", CoreConfigGenerator.LOCAL_SOCKS_PORT)
-                            putExtra("SERVER_PING", realPing)
+                            putExtra("CORE_NAME", "Tor (${selectedBridge.id})")
+                            putExtra("SERVER_NAME", "${selectedCountry.flag} ${selectedCountry.name}")
+                            putExtra("SOCKS_PORT", TorEngineRunner.TOR_SOCKS_PORT)
+                            putExtra("SERVER_PING", -1L)
                         }
                         context.startService(srvIntent)
                         isConnected = true
-                        statusText = "✅ متصل با Full TUN (پینگ Real HTTP: $realPing ms)"
+                        statusText = "✅ متصل به Tor (پل: ${selectedBridge.id} | کشور: ${selectedCountry.flag} ${selectedCountry.name})"
                     } else {
-                        configs = configs.map { if (it.id == target.id) it.copy(pingMs = -2L) else it }
-                        CoreEngineRunner.stopCore()
                         isConnected = false
-                        statusText = "❌ این کانفیگ اینترنت واقعی ندارد؛ کانفیگ بعدی را بزنید"
+                        statusText = TorEngineRunner.lastError.ifBlank { "خطا در اتصال به شبکه Tor" }
                     }
                 } else {
-                    configs = configs.map { if (it.id == target.id) it.copy(pingMs = -2L) else it }
-                    isConnected = false
-                    statusText = CoreEngineRunner.lastErrorLog.ifBlank { "خطا در راه‌اندازی کانفیگ!" }
+                    TorEngineRunner.stopTor()
+                    val target = selectedConfig ?: filteredConfigs.firstOrNull()
+                    if (target == null) {
+                        statusText = "کانفیگی وجود ندارد! ابتدا ساب‌لینک را بروزرسانی کنید."
+                        return@launch
+                    }
+                    statusText = "در حال اتصال و تست Real HTTP روی ${target.name}..."
+                    val coreStarted = CoreEngineRunner.startCore(context, target)
+                    if (!isActive) {
+                        CoreEngineRunner.stopCore()
+                        return@launch
+                    }
+                    if (coreStarted) {
+                        val realPing = CoreEngineRunner.measureRealTunnelDelay()
+                        if (!isActive) {
+                            CoreEngineRunner.stopCore()
+                            return@launch
+                        }
+                        if (realPing > 0) {
+                            configs = configs.map { if (it.id == target.id) it.copy(pingMs = realPing) else it }
+                            selectedConfig = target.copy(pingMs = realPing)
+
+                            val srvIntent = Intent(context, MultiCoreVpnService::class.java).apply {
+                                putExtra("CORE_NAME", target.coreType)
+                                putExtra("SERVER_NAME", target.name)
+                                putExtra("SOCKS_PORT", CoreConfigGenerator.LOCAL_SOCKS_PORT)
+                                putExtra("SERVER_PING", realPing)
+                            }
+                            context.startService(srvIntent)
+                            isConnected = true
+                            statusText = "✅ متصل با Full TUN (پینگ Real HTTP: $realPing ms)"
+                        } else {
+                            configs = configs.map { if (it.id == target.id) it.copy(pingMs = -2L) else it }
+                            CoreEngineRunner.stopCore()
+                            isConnected = false
+                            statusText = "❌ این کانفیگ اینترنت واقعی ندارد؛ کانفیگ بعدی را بزنید"
+                        }
+                    } else {
+                        configs = configs.map { if (it.id == target.id) it.copy(pingMs = -2L) else it }
+                        isConnected = false
+                        statusText = CoreEngineRunner.lastErrorLog.ifBlank { "خطا در راه‌اندازی کانفیگ!" }
+                    }
                 }
+            } finally {
+                isBusy = false
+                isConnecting = false
             }
-            isBusy = false
         }
     }
 
@@ -189,6 +215,10 @@ fun SinglePageVpnScreen() {
                 }
                 showLicenseDialog = true
             }
+            if (isConnected && selectedCore != "Tor" && !CoreEngineRunner.isCoreRunning()) {
+                isConnected = false
+                statusText = "اتصال قطع شد (هسته متوقف شد)"
+            }
             delay(1000L)
         }
     }
@@ -207,7 +237,7 @@ fun SinglePageVpnScreen() {
                     val reasonText = when (val s = licenseStatus) {
                         is LicenseStatus.Expired -> s.message
                         is LicenseStatus.Invalid -> s.reason
-                        is LicenseStatus.Missing -> "شناسه دستگاه زیر را به ربات تلگرام بفرستید و کد ۵ روزه را وارد کنید."
+                        is LicenseStatus.Missing -> "ابتدا در کانال @UCIRANIR عضو شوید، سپس شناسه دستگاه را برای ربات بفرستید و دو پست کانال را فوروارد کنید."
                         is LicenseStatus.Valid -> "کد شما فعال است. می‌توانید کد جدیدی جایگزین کنید."
                     }
                     Text(text = reasonText)
@@ -231,7 +261,7 @@ fun SinglePageVpnScreen() {
                     OutlinedTextField(
                         value = inputCode,
                         onValueChange = { inputCode = it },
-                        label = { Text("کد دریافتی از ربات (MV2-...)") },
+                        label = { Text("کد دریافتی از ربات (MV3-...)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -269,9 +299,9 @@ fun SinglePageVpnScreen() {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(14.dp),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(10.dp)) {
@@ -299,19 +329,27 @@ fun SinglePageVpnScreen() {
                         showLicenseDialog = true
                         return@Button
                     }
-                    if (isConnected) {
+                    if (isConnecting || isConnected) {
+                        val wasConnecting = isConnecting
                         stopAllConnections()
-                        statusText = "اتصال قطع شد"
+                        statusText = if (wasConnecting) "اتصال لغو شد" else "اتصال قطع شد"
                     } else {
                         val prep = VpnService.prepare(context)
                         if (prep != null) vpnPermissionLauncher.launch(prep)
                         else startActiveConnection()
                     }
                 },
-                enabled = isLicenseValid && !isBusy,
+                enabled = isLicenseValid,
                 modifier = Modifier.size(125.dp)
             ) {
-                Text(if (isConnected) "قطع اتصال" else if (isLicenseValid) "اتصال" else "قفل است")
+                Text(
+                    when {
+                        isConnecting -> "لغو"
+                        isConnected -> "قطع اتصال"
+                        isLicenseValid -> "اتصال"
+                        else -> "قفل است"
+                    }
+                )
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(text = statusText, fontWeight = FontWeight.Medium)
@@ -329,8 +367,8 @@ fun SinglePageVpnScreen() {
             }
         }
 
-        // ردیف انتخاب نوع پل و انتخاب کشور (با حالت خودکار)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ردیف پل و کشور فقط در حالت Tor نمایش داده می‌شود
+        if (selectedCore == "Tor") Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(modifier = Modifier.weight(1f)) {
                 OutlinedButton(onClick = { expandBridgeMenu = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(text = "پل: ${selectedBridge.id.uppercase()}", maxLines = 1)

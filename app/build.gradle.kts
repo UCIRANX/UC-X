@@ -27,21 +27,23 @@ android {
     }
 
     signingConfigs {
-        create("permanentSign") {
-            storeFile = rootProject.file("keystore/app.jks")
-            storePassword = "MultiVpnPassword123"
-            keyAlias = "multivpn"
-            keyPassword = "MultiVpnPassword123"
+        create("release") {
+            storeFile = rootProject.file("keystore/release.jks")
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                ?: error("ANDROID_KEYSTORE_PASSWORD تنظیم نشده است")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "ucx"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                ?: error("ANDROID_KEY_PASSWORD تنظیم نشده است")
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("permanentSign")
+            signingConfig = signingConfigs.getByName("release")
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("permanentSign")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
