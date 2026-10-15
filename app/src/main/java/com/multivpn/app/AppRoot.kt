@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,12 +30,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.multivpn.app.core.CoreEngineRunner
 import com.multivpn.app.security.DeviceIdProvider
 import com.multivpn.app.security.LicenseManager
 import com.multivpn.app.security.LicenseStatus
@@ -48,19 +49,23 @@ import ir.uciran.uctor.ui.Violet
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-/** دو حالت برنامه: VPN (سرورهای ساب‌لینک) و تور (موتور UC-Tor). هر حالت فقط گزینه‌های خودش را دارد. */
-enum class AppMode(val label: String) { VPN("VPN"), TOR("تور") }
+/** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
+enum class AppMode(val label: String) { VPN("Sing-Box"), TOR("تور") }
+
+private val TextSub = Color(0xFFB4B4C8)
 
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
     val torState by TorController.state.collectAsStateWithLifecycle()
+    val torPhase = torState.phase
     var mode by rememberSaveable { mutableStateOf(AppMode.VPN) }
     var license by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
     val valid = license is LicenseStatus.Valid
+    val deviceId = remember { DeviceIdProvider.getFormattedDeviceId(context) }
 
-    // بررسی لایسنس و قطع خودکار هر دو حالت وقتی مهلت تمام شود
     LaunchedEffect(Unit) {
+        SingBoxController.ensureLoaded(context)
         TimeGuard.syncNetworkTime(context)
         var wasValid = valid
         while (isActive) {
@@ -68,8 +73,7 @@ fun AppRoot() {
             license = now
             val nowValid = now is LicenseStatus.Valid
             if (wasValid && !nowValid) {
-                CoreEngineRunner.stopCore()
-                context.stopService(Intent(context, MultiCoreVpnService::class.java))
+                SingBoxController.stop(context, "مهلت لایسنس تمام شد")
                 TorController.disconnect()
             }
             wasValid = nowValid
@@ -77,47 +81,46 @@ fun AppRoot() {
         }
     }
 
-    fun switchMode(target: AppMode) {
-        if (target == mode) return
-        if (target == AppMode.TOR) {
-            // VPN سراسری یکی بیشتر نمی‌تواند فعال باشد
-            CoreEngineRunner.stopCore()
-            context.stopService(Intent(context, MultiCoreVpnService::class.java))
-        } else if (torState.phase != Phase.IDLE) {
-            TorController.disconnect()
+    // تور و Sing-Box هر دو VPN سراسری لازم دارند؛ وقتی تور شروع می‌شود Sing-Box قطع می‌شود
+    LaunchedEffect(torPhase) {
+        if (torPhase == Phase.CONNECTING) {
+            SingBoxController.stop(context, "Sing-Box برای اتصال تور قطع شد")
         }
-        mode = target
     }
 
-    val licenseLine = when (val s = license) {
-        is LicenseStatus.Valid -> "شناسه ${DeviceIdProvider.getFormattedDeviceId(context)}  ·  ${LicenseManager.formatRemainingTime(s.remainingSeconds)}"
-        else -> "شناسه ${DeviceIdProvider.getFormattedDeviceId(context)}  ·  لایسنس فعال نیست"
-    }
+    val remaining = (license as? LicenseStatus.Valid)
+        ?.let { LicenseManager.formatRemainingTime(it.remainingSeconds) }
+        ?: "لایسنس فعال نیست"
 
-    Box(
-        Modifier.fillMaxSize().background(
-            Brush.verticalGradient(listOf(Color(0xFF1C1238), Bg, Bg))
-        )
-    ) {
-        Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime))
-        ) {
-            ModeSwitch(mode = mode, onChange = { switchMode(it) })
-            Text(
-                licenseLine,
-                color = Color(0xFFB4B4C8),
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color(0xFF1C1238), Bg, Bg))
             )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                when (mode) {
-                    AppMode.VPN -> VpnScreen(licenseValid = valid)
-                    AppMode.TOR -> MainScreen()
+        ) {
+            Column(
+                Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime))
+            ) {
+                ModeSwitch(mode = mode, onChange = { mode = it })
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("شناسه ", color = TextSub, fontSize = 12.sp, style = ContentStyle)
+                    Text(deviceId, color = TextSub, fontSize = 12.sp, style = LtrStyle)
+                    Text("  ·  ", color = TextSub, fontSize = 12.sp, style = ContentStyle)
+                    Text(remaining, color = TextSub, fontSize = 12.sp, style = ContentStyle)
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (mode) {
+                        AppMode.VPN -> VpnScreen(licenseValid = valid)
+                        AppMode.TOR -> MainScreen()
+                    }
                 }
             }
+            if (!valid) LicenseGate(status = license, onActivated = { license = it })
         }
-        if (!valid) LicenseGate(status = license, onActivated = { license = it })
     }
 }
 
@@ -143,9 +146,10 @@ private fun ModeSwitch(mode: AppMode, onChange: (AppMode) -> Unit) {
             ) {
                 Text(
                     m.label,
-                    color = if (on) Color.White else Color(0xFFB4B4C8),
+                    color = if (on) Color.White else TextSub,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
+                    style = if (m == AppMode.VPN) LtrStyle else ContentStyle,
                 )
             }
         }

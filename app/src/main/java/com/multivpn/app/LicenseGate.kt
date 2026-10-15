@@ -78,7 +78,7 @@ fun LicenseGate(status: LicenseStatus, onActivated: (LicenseStatus) -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text("شناسه دستگاه", fontSize = 12.sp, color = Color(0xFFB4B4C8))
-                        Text(deviceId, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text(deviceId, fontWeight = FontWeight.Bold, fontSize = 18.sp, style = LtrStyle)
                     }
                     TextButton(onClick = {
                         val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

@@ -66,7 +66,7 @@ object BridgeRepository {
     private const val CACHE = "bridges_cache.json"
     private const val MOAT = "https://bridges.torproject.org/moat/circumvention/builtin"
     private const val GH = "https://raw.githubusercontent.com"
-    private const val TELEGRAM_PAGES = 3
+    private const val TELEGRAM_PAGES = 2
 
     /** سقف تعداد بریج ذخیره‌شده برای هر روش (مثل collect_bridges.py). */
     private val LIMITS = mapOf("webtunnel" to 150, "obfs4" to 300, "vanilla" to 150)
@@ -162,12 +162,12 @@ object BridgeRepository {
 
     /** اتصال مستقیم (بدون Tor). دکمه‌ی دستی همیشه force=true می‌زند. */
     fun refreshDirect(ctx: Context, force: Boolean = true): Boolean =
-        refresh(ctx, Proxy.NO_PROXY, 10_000, force)
+        refresh(ctx, Proxy.NO_PROXY, 6_000, force)
 
     /** دانلود از داخل تونل HTTP خودِ Tor (بدون نشت DNS). */
     fun refreshViaTor(ctx: Context, httpPort: Int, force: Boolean = false): Boolean =
         httpPort > 0 && refresh(
-            ctx, Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort)), 45_000, force,
+            ctx, Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort)), 20_000, force,
         )
 
     private fun refresh(ctx: Context, proxy: Proxy, timeout: Int, force: Boolean): Boolean {
@@ -249,9 +249,9 @@ object BridgeRepository {
         }
 
         val results = mutableListOf<Fetched>()
-        val pool = Executors.newFixedThreadPool(8)
+        val pool = Executors.newFixedThreadPool(24)
         try {
-            for (f in pool.invokeAll(tasks, 90, TimeUnit.SECONDS)) {
+            for (f in pool.invokeAll(tasks, 30, TimeUnit.SECONDS)) {
                 runCatching { f.get() }.getOrNull()?.let { results += it }
             }
         } finally {

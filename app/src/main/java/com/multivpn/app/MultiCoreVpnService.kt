@@ -1,6 +1,7 @@
 package com.multivpn.app
 
 import android.app.NotificationChannel
+import android.app.Service
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -24,10 +25,20 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 class MultiCoreVpnService : VpnService() {
+    companion object {
+        const val ACTION_STOP = "com.multivpn.app.action.STOP_VPN"
+    }
+
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnInterface: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopTunnel()
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val coreName = intent?.getStringExtra("CORE_NAME") ?: "Sing-box (Xray)"
         val serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
         val socksPort = intent?.getIntExtra("SOCKS_PORT", CoreConfigGenerator.LOCAL_SOCKS_PORT) ?: CoreConfigGenerator.LOCAL_SOCKS_PORT
