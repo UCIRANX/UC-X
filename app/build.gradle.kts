@@ -88,6 +88,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // کتابخانه‌های رسمی Tor و Pluggable Transports و Full TUN AAR
     implementation("info.guardianproject:tor-android:0.4.9.6")

@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightNavigationBars = false
         }
         TorController.init(applicationContext)
+        SubUpdate.schedule(applicationContext)
         ContextCompat.registerReceiver(
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )

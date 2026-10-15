@@ -199,6 +199,15 @@ fun VpnScreen(licenseValid: Boolean) {
                 modifier = Modifier.weight(1f),
             ) { Text(if (ctl.busy) "در حال کار…" else "تست پینگ", maxLines = 1) }
         }
+        Text(
+            if (ctl.lastUpdate.isBlank()) "هنوز سرورها بروزرسانی نشده؛ هر ۲۴ ساعت خودکار بروز می‌شوند"
+            else "آخرین بروزرسانی: ${ctl.lastUpdate} · هر ۲۴ ساعت خودکار",
+            color = TextSub,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            style = ContentStyle,
+            modifier = Modifier.fillMaxWidth(),
+        )
         Spacer(Modifier.height(4.dp))
     }
 }

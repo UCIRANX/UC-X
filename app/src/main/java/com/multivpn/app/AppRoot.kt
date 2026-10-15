@@ -69,6 +69,7 @@ fun AppRoot() {
         TimeGuard.syncNetworkTime(context)
         var wasValid = valid
         while (isActive) {
+            SingBoxController.refreshFromStore(context)
             val now = LicenseManager.getCurrentLicenseStatus(context)
             license = now
             val nowValid = now is LicenseStatus.Valid
