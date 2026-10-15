@@ -1,42 +1,108 @@
 package com.multivpn.app.sub
 
+import android.content.Context
+import com.multivpn.app.core.CoreConfigGenerator
+import com.multivpn.app.core.CoreEngineRunner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 
 object PingTester {
-    private val semaphore = Semaphore(10)
+    private val tcpSemaphore = Semaphore(30)
 
-    suspend fun measureTcpPing(host: String, port: Int, timeoutMs: Int = 2500): Long = withContext(Dispatchers.IO) {
+    private suspend fun isPortOpen(host: String, port: Int, timeoutMs: Int = 1300): Boolean = withContext(Dispatchers.IO) {
         try {
-            val start = System.currentTimeMillis()
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress(host.removeSurrounding("[", "]"), port), timeoutMs)
+            Socket().use { s ->
+                s.connect(InetSocketAddress(host.removeSurrounding("[", "]"), port), timeoutMs)
             }
-            val elapsed = System.currentTimeMillis() - start
-            if (elapsed <= 0L) 1L else elapsed
-        } catch (e: Exception) {
-            -2L
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
-    suspend fun pingAllConfigs(configs: List<VpnConfig>): List<VpnConfig> = coroutineScope {
-        val jobs = configs.map { cfg ->
-            async(Dispatchers.IO) {
-                semaphore.withPermit {
-                    val latency = measureTcpPing(cfg.host, cfg.port)
-                    cfg.copy(pingMs = latency)
+    suspend fun pingAllConfigsRealHttp(
+        context: Context,
+        configs: List<VpnConfig>,
+        onProgress: (String) -> Unit = {}
+    ): List<VpnConfig> = withContext(Dispatchers.IO) {
+        val nativeDir = context.applicationInfo.nativeLibraryDir
+        val xrayBinary = File(nativeDir, "libxray.so")
+        if (!xrayBinary.exists()) return@withContext configs
+        xrayBinary.setExecutable(true)
+
+        onProgress("گام ۱/۲: بررسی سریع پورت ${configs.size} سرور...")
+
+        val openMap = coroutineScope {
+            configs.map { cfg ->
+                async {
+                    tcpSemaphore.withPermit {
+                        cfg.id to isPortOpen(cfg.host, cfg.port)
+                    }
+                }
+            }.awaitAll().toMap()
+        }
+
+        val candidates = configs.filter { openMap[it.id] == true && !it.protocol.equals("hy2", true) }
+        val realResults = mutableMapOf<String, Long>()
+
+        val batches = candidates.chunked(20)
+        batches.forEachIndexed { idx, batch ->
+            onProgress("گام ۲/۲: تست Real HTTP دسته‌ای (${idx + 1} از ${batches.size})...")
+            val validPairs = mutableListOf<Pair<VpnConfig, String>>()
+            for (cfg in batch) {
+                try {
+                    val ip = CoreEngineRunner.resolveHostToIp(cfg.host)
+                    CoreConfigGenerator.buildMainOutbound(cfg, ip)
+                    validPairs.add(cfg to ip)
+                } catch (_: Exception) {
+                    realResults[cfg.id] = -2L
+                }
+            }
+
+            if (validPairs.isNotEmpty()) {
+                var proc: Process? = null
+                try {
+                    val batchFile = File(context.filesDir, "batch_ping.json")
+                    batchFile.writeText(CoreConfigGenerator.buildBatchPingXrayJson(validPairs), Charsets.UTF_8)
+
+                    proc = ProcessBuilder(xrayBinary.absolutePath, "run", "-c", batchFile.absolutePath).apply {
+                        environment()["XRAY_LOCATION_ASSET"] = nativeDir
+                        directory(context.filesDir)
+                        redirectErrorStream(true)
+                    }.start()
+
+                    for (w in 0 until 12) {
+                        delay(150L)
+                        if (CoreEngineRunner.isLocalPortListening(CoreConfigGenerator.BATCH_BASE_PORT)) break
+                    }
+
+                    coroutineScope {
+                        validPairs.mapIndexed { bIdx, (cfg, _) ->
+                            async {
+                                val httpPort = CoreConfigGenerator.BATCH_BASE_PORT + bIdx
+                                realResults[cfg.id] = CoreEngineRunner.measureRealTunnelDelay(httpPort = httpPort, timeoutSec = 4)
+                            }
+                        }.awaitAll()
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    try { proc?.destroy(); proc?.destroyForcibly() } catch (_: Exception) {}
                 }
             }
         }
-        val results = jobs.awaitAll()
-        results.sortedWith(compareBy {
+
+        configs.map { cfg ->
+            cfg.copy(pingMs = realResults[cfg.id] ?: -2L)
+        }.sortedWith(compareBy {
             when {
                 it.pingMs > 0 -> it.pingMs
                 it.pingMs == -1L -> 999998L
