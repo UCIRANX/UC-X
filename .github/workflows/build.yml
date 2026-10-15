@@ -91,9 +91,107 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tools/keys.sh
 
+  native:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Resolve target
+        run: |
+          case "${{ matrix.abi }}" in
+            arm64-v8a)
+              echo "RUST_TARGET=aarch64-linux-android" >> "$GITHUB_ENV"
+              echo "GO_ARCH=arm64" >> "$GITHUB_ENV"
+              echo "GO_ARM=" >> "$GITHUB_ENV" ;;
+            armeabi-v7a)
+              echo "RUST_TARGET=armv7-linux-androideabi" >> "$GITHUB_ENV"
+              echo "GO_ARCH=arm" >> "$GITHUB_ENV"
+              echo "GO_ARM=7" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add "$RUST_TARGET"
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "aether -> target"
+          key: android-${{ matrix.abi }}
+
+      - name: Install cargo-ndk
+        run: cargo ndk --version || cargo install cargo-ndk --locked
+
+      - name: Build Tor transport (lyrebird)
+        working-directory: aether
+        run: bash ../pt-build.sh linux "$GO_ARCH" "$PWD/pt" "$GO_ARM"
+
+      - name: Build Psiphon
+        working-directory: aether
+        run: bash ../psiphon-build.sh linux "$GO_ARCH" "$PWD/pt" "$GO_ARM"
+
+      - name: Build Aether core
+        working-directory: aether
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          under=$(echo "$RUST_TARGET" | tr '-' '_')
+          export "BORING_BSSL_RUST_CPPLIB_${under}=static:-bundle=c++"
+          cargo ndk -t ${{ matrix.abi }} --platform 24 build --release --features tor --bin aether
+          bin="target/$RUST_TARGET/release/aether"
+          needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+          echo "aether NEEDED: $needed"
+          if grep -qx 'libc++_shared.so' <<<"$needed"; then
+            echo "::error::aether still needs libc++_shared.so"; exit 1
+          fi
+
+      - name: Stage native binaries
+        working-directory: aether
+        run: |
+          out="$RUNNER_TEMP/native-${{ matrix.abi }}"
+          mkdir -p "$out"
+          cp "target/$RUST_TARGET/release/aether" "$out/libaether.so"
+          for f in pt/*; do
+            [ -f "$f" ] || continue
+            n=$(basename "$f"); n="${n%.exe}"
+            cp "$f" "$out/lib${n}.so"
+          done
+          ls -la "$out"
+
+      - name: Upload native binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.abi }}
+          path: ${{ runner.temp }}/native-${{ matrix.abi }}/*
+
   build:
-    needs: [apply-zip, keys]
-    if: ${{ always() && needs.keys.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    needs: [apply-zip, keys, native]
+    if: ${{ always() && needs.keys.result == 'success' && needs.native.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +217,21 @@ jobs:
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
           GH_TOKEN: ${{ github.token }}
         run: bash tools/keys.sh
+
+      - name: Download native binaries (Aether, Psiphon, lyrebird)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native
+
+      - name: Place native binaries into jniLibs
+        run: |
+          for d in native/native-*; do
+            abi="${d#native/native-}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "$d"/* "app/src/main/jniLibs/$abi/"
+          done
+          ls -la app/src/main/jniLibs/*/
 
       - name: Embed license public key
         run: |

@@ -67,11 +67,13 @@ fun VpnScreen(licenseValid: Boolean) {
     }
 
     val accent = when {
+        ctl.paused -> Color(0xFFFFB300)
         ctl.connected -> Green
         ctl.connecting -> Cyan
         else -> Violet
     }
     val circleText = when {
+        ctl.paused -> "ادامه"
         ctl.connecting -> "لغو"
         ctl.connected -> "قطع"
         else -> "اتصال"
@@ -95,7 +97,9 @@ fun VpnScreen(licenseValid: Boolean) {
                     CircleShape,
                 )
                 .clickable(enabled = canTap) {
-                    if (ctl.connecting || ctl.connected) {
+                    if (ctl.paused) {
+                        ctl.resume(context)
+                    } else if (ctl.connecting || ctl.connected) {
                         val wasConnecting = ctl.connecting
                         ctl.stop(context, if (wasConnecting) "اتصال لغو شد" else "اتصال قطع شد")
                     } else {

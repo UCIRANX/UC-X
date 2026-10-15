@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,6 +66,16 @@ object SingBoxController {
 
     val selected: VpnConfig?
         get() = configs.firstOrNull { it.id == selectedId }
+
+    /** توقف موقت: تونل بسته ولی نشست فعال است. */
+    var paused: Boolean by mutableStateOf(false)
+        private set
+
+    fun resume(ctx: Context) {
+        if (!paused) return
+        status = "در حال اتصال مجدد…"
+        ctx.startService(Intent(ctx, MultiCoreVpnService::class.java).setAction(MultiCoreVpnService.ACTION_RESUME))
+    }
 
     fun reportStatus(msg: String) {
         status = msg
@@ -150,6 +161,12 @@ object SingBoxController {
         lastUpdate = formatTime(loadedStamp)
         replaceConfigs(SubManager.loadCachedConfigs(ctx))
         status = if (configs.isEmpty()) "ابتدا سرورها را بروزرسانی کنید" else "آماده اتصال"
+        scope.launch {
+            MultiCoreVpnService.pausedFlow.collect { p ->
+                paused = p
+                if (connected) status = if (p) "متوقف موقت" else "متصل"
+            }
+        }
         // اگر هسته بیرون از برنامه بسته شود، وضعیت باید درست شود
         scope.launch {
             while (isActive) {
@@ -205,6 +222,11 @@ object SingBoxController {
         connecting = true
         status = "در حال اتصال به ${t.name}…"
         connJob = scope.launch {
+            // نوتیفیکیشن همان لحظهٔ شروع اتصال نشان داده شود
+            ctx.startService(Intent(ctx, MultiCoreVpnService::class.java).apply {
+                action = MultiCoreVpnService.ACTION_CONNECTING
+                putExtra("SERVER_NAME", t.name)
+            })
             if (wasActive) {
                 // دقیقاً مثل قطع کامل و بعد اتصال: اول تونل قبلی بسته شود
                 delay(400L)

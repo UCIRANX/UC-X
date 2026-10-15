@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -36,16 +37,22 @@ class MainActivity : ComponentActivity() {
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    // تأیید VPN سیستم باید قبل از مجوز اعلان نشان داده شود
+    // بعد از هر پاسخ به مجوز VPN، مجوز نوتیفیکیشن پرسیده می‌شود
     private val vpnPermission =
         registerForActivityResult(StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) {
-                requestNotificationPermission()
-                if (TorController.state.value.phase == Phase.CONNECTED && !Prefs(this).vpnRunning) {
-                    FullVpnService.start(this)
-                }
+            requestNotificationPermission()
+            if (result.resultCode == RESULT_OK &&
+                TorController.state.value.phase == Phase.CONNECTED && !Prefs(this).vpnRunning
+            ) {
+                FullVpnService.start(this)
             }
         }
+
+    /** ترتیب درست: اول مجوز VPN، سپس مجوز نوتیفیکیشن. */
+    private fun requestVpnThenNotification() {
+        val intent = VpnService.prepare(this)
+        if (intent != null) vpnPermission.launch(intent) else requestNotificationPermission()
+    }
 
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -88,6 +95,6 @@ class MainActivity : ComponentActivity() {
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )
         setContent { UcTorTheme { AppRoot() } }
-        window.decorView.post { requestNotificationPermission() }
+        window.decorView.post { requestVpnThenNotification() }
     }
 }

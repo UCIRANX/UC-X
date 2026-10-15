@@ -1,14 +1,17 @@
 package com.multivpn.app
 
+import android.app.Notification
 import android.app.NotificationChannel
-import android.app.Service
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.multivpn.app.core.CoreConfigGenerator
 import com.multivpn.app.core.CoreEngineRunner
@@ -17,6 +20,7 @@ import com.multivpn.app.security.LicenseManager
 import com.multivpn.app.security.LicenseStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -24,37 +28,86 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
+/** سرویس VPN سینگ‌باکس با نوتیفیکیشن مشابه نوتیفیکیشن تور (سرعت لحظه‌ای، توقف موقت، قطع کامل). */
 class MultiCoreVpnService : VpnService() {
     companion object {
-        const val ACTION_STOP = "com.multivpn.app.action.STOP_VPN"
+        const val ACTION_STOP = "com.multivpn.app.action.STOP_VPN"       // قطع کامل
+        const val ACTION_PAUSE = "com.multivpn.app.action.PAUSE_VPN"     // توقف موقت
+        const val ACTION_RESUME = "com.multivpn.app.action.RESUME_VPN"   // اتصال مجدد
+        const val ACTION_CONNECTING = "com.multivpn.app.action.CONNECTING"
+        private const val NOTIF_ID = 1001
+        private const val CHANNEL_ID = "singbox_channel"
+
+        private val pausedState = kotlinx.coroutines.flow.MutableStateFlow(false)
+        /** وضعیت توقف موقت؛ UI با این جریان به‌روز می‌شود. */
+        val pausedFlow: kotlinx.coroutines.flow.StateFlow<Boolean> get() = pausedState
+        val paused: Boolean get() = pausedState.value
+        private fun setPaused(value: Boolean) { pausedState.value = value }
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnInterface: ParcelFileDescriptor? = null
+    private var expiryJob: Job? = null
+    private var speedJob: Job? = null
+
+    private var coreName = "سینگ‌باکس"
+    private var serverName = ""
+    private var socksPort = CoreConfigGenerator.LOCAL_SOCKS_PORT
+    private var serverPing = -1L
+    private var tunnelUp = false
+
+    private var prevRx = 0L
+    private var prevTx = 0L
+    private var prevTs = 0L
+    private var downBps = 0L
+    private var upBps = 0L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopTunnel()
-            stopForeground(Service.STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                shutdown()
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE -> {
+                pauseTunnel()
+                return START_STICKY
+            }
+            ACTION_RESUME -> {
+                resumeTunnel()
+                return START_STICKY
+            }
+            ACTION_CONNECTING -> {
+                // نوتیفیکیشن فوراً نشان داده می‌شود، همان لحظه‌ای که اتصال شروع شد
+                serverName = intent.getStringExtra("SERVER_NAME") ?: serverName
+                tunnelUp = false
+                showNotification(connecting = true)
+                return START_STICKY
+            }
         }
-        val coreName = intent?.getStringExtra("CORE_NAME") ?: "Sing-box (Xray)"
-        val serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
-        val socksPort = intent?.getIntExtra("SOCKS_PORT", CoreConfigGenerator.LOCAL_SOCKS_PORT) ?: CoreConfigGenerator.LOCAL_SOCKS_PORT
-        val serverPing = intent?.getLongExtra("SERVER_PING", -1L) ?: -1L
 
-        startVpnForegroundNotification(coreName, serverName, serverPing)
+        coreName = intent?.getStringExtra("CORE_NAME") ?: coreName
+        serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
+        socksPort = intent?.getIntExtra("SOCKS_PORT", CoreConfigGenerator.LOCAL_SOCKS_PORT) ?: CoreConfigGenerator.LOCAL_SOCKS_PORT
+        serverPing = intent?.getLongExtra("SERVER_PING", -1L) ?: -1L
+
         serviceScope.launch {
-            establishFullTunWithMapDns(serverName, socksPort)
+            val ok = establishTunnel(serverName, socksPort)
+            if (ok) {
+                tunnelUp = true
+                setPaused(false)
+                showNotification(connecting = false)
+                startSpeedUpdates()
+            } else {
+                showNotification(connecting = false)
+            }
         }
         startExpirationWatchdog()
         return START_STICKY
     }
 
-    // پیاده‌سازی دقیق Full TUN + MapDNS مطابق پروژه UC Tor برای باز شدن تلگرام و کل اپ‌ها
-    private fun establishFullTunWithMapDns(serverName: String, socksPort: Int) {
-        try {
+    /** تونل Full TUN + MapDNS؛ موفق بودن را برمی‌گرداند. */
+    private fun establishTunnel(serverName: String, socksPort: Int): Boolean {
+        return try {
             stopTunnelOnly()
             val builder = Builder()
                 .setSession("MultiCoreVPN - $serverName")
@@ -68,12 +121,11 @@ class MultiCoreVpnService : VpnService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setMetered(false)
             }
-
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (_: Exception) {}
 
-            val pfd = builder.establish() ?: return
+            val pfd = builder.establish() ?: return false
             vpnInterface = pfd
 
             val hevConf = File(filesDir, "hev-tun.conf")
@@ -104,37 +156,119 @@ class MultiCoreVpnService : VpnService() {
             )
 
             Tun2SocksBridge.start(hevConf, pfd.fd)
-        } catch (_: Throwable) {}
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
-    private fun startVpnForegroundNotification(coreName: String, serverName: String, ping: Long) {
-        val channelId = "vpn_active_channel"
+    private fun pauseTunnel() {
+        if (paused) return
+        setPaused(true)
+        tunnelUp = false
+        speedJob?.cancel()
+        stopTunnelOnly()
+        showNotification(connecting = false)
+    }
+
+    private fun resumeTunnel() {
+        if (!paused) return
+        serviceScope.launch {
+            val ok = establishTunnel(serverName, socksPort)
+            if (ok) {
+                setPaused(false)
+                tunnelUp = true
+                startSpeedUpdates()
+            }
+            showNotification(connecting = false)
+        }
+    }
+
+    private fun startSpeedUpdates() {
+        speedJob?.cancel()
+        prevRx = TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+        prevTx = TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+        prevTs = SystemClock.elapsedRealtime()
+        speedJob = serviceScope.launch {
+            while (isActive && tunnelUp) {
+                delay(1000L)
+                val rx = TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+                val tx = TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+                val now = SystemClock.elapsedRealtime()
+                val seconds = ((now - prevTs).coerceAtLeast(1L)) / 1000.0
+                downBps = ((rx - prevRx).coerceAtLeast(0L) / seconds).toLong()
+                upBps = ((tx - prevTx).coerceAtLeast(0L) / seconds).toLong()
+                prevRx = rx
+                prevTx = tx
+                prevTs = now
+                showNotification(connecting = false)
+            }
+        }
+    }
+
+    private fun formatSpeed(bps: Long): String = when {
+        bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
+        bps >= 1_000 -> "%.0f KB/s".format(bps / 1_000.0)
+        else -> "$bps B/s"
+    }
+
+    private fun pending(action: String, code: Int): PendingIntent =
+        PendingIntent.getService(
+            this, code,
+            Intent(this, MultiCoreVpnService::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+    private fun showNotification(connecting: Boolean) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            nm.createNotificationChannel(NotificationChannel(channelId, "وضعیت اتصال فیلترشکن", NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "سینگ باکس", NotificationManager.IMPORTANCE_LOW)
+            )
         }
-        val pendingIntent = PendingIntent.getActivity(
+        val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val pingText = if (ping > 0) " (${ping}ms)" else ""
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("متصل به $coreName (Full TUN)")
-            .setContentText("سرور: $serverName$pingText")
-            .setContentIntent(pendingIntent)
+        val text = when {
+            connecting -> "در حال اتصال به $serverName…"
+            paused -> "متوقف موقت · $serverName"
+            tunnelUp -> "↓ ${formatSpeed(downBps)}   ↑ ${formatSpeed(upBps)}"
+            else -> "در حال اتصال…"
+        }
+        val pingText = if (serverPing > 0 && tunnelUp && !paused) "  ·  ${serverPing}ms" else ""
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_uc)
+            .setColor(0xFF39FF14.toInt())
+            .setContentTitle("سینگ باکس")
+            .setContentText(text + pingText)
+            .setSubText(if (tunnelUp) serverName else null)
+            .setContentIntent(open)
             .setOngoing(true)
-            .build()
-        startForeground(1001, notification)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+
+        if (tunnelUp || paused) {
+            builder.addAction(
+                0,
+                if (paused) "اتصال مجدد" else "توقف موقت",
+                pending(if (paused) ACTION_RESUME else ACTION_PAUSE, 1)
+            )
+        }
+        builder.addAction(0, "قطع کامل", pending(ACTION_STOP, 2))
+
+        val notification: Notification = builder.build()
+        startForeground(NOTIF_ID, notification)
     }
 
     private fun startExpirationWatchdog() {
-        serviceScope.launch {
+        expiryJob?.cancel()
+        expiryJob = serviceScope.launch {
             while (isActive) {
                 if (LicenseManager.getCurrentLicenseStatus(applicationContext) !is LicenseStatus.Valid) {
                     sendExpirationNotification()
-                    stopTunnel()
-                    stopSelf()
+                    shutdown()
                     break
                 }
                 delay(5000L)
@@ -151,6 +285,17 @@ class MultiCoreVpnService : VpnService() {
     private fun stopTunnel() {
         runCatching { CoreEngineRunner.stopCore() }
         stopTunnelOnly()
+    }
+
+    /** قطع کامل: هسته، تونل، نوتیفیکیشن و خود سرویس. */
+    private fun shutdown() {
+        speedJob?.cancel()
+        expiryJob?.cancel()
+        tunnelUp = false
+        setPaused(false)
+        stopTunnel()
+        stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun sendExpirationNotification() {
@@ -170,6 +315,8 @@ class MultiCoreVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        speedJob?.cancel()
+        expiryJob?.cancel()
         stopTunnel()
         serviceScope.cancel()
         super.onDestroy()
