@@ -23,7 +23,7 @@ android {
         buildConfigField("String", "BRIDGE_REPO", "\"UCIRANX/UC-Tor\"")
 
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
