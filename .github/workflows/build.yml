@@ -3,7 +3,15 @@ name: UC-X
 on:
   push:
     branches: [main, master]
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      task:
+        description: "کدام کار اجرا شود"
+        type: choice
+        default: build
+        options: [build, bridges, both]
 
 permissions:
   contents: write
@@ -71,7 +79,7 @@ jobs:
 
   keys:
     needs: apply-zip
-    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' }}
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +93,7 @@ jobs:
 
   build:
     needs: [apply-zip, keys]
-    if: ${{ always() && needs.keys.result == 'success' }}
+    if: ${{ always() && needs.keys.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,6 +129,16 @@ jobs:
             exit 1
           fi
 
+      - name: Embed latest bridges into the APK
+        run: |
+          if git fetch -q --depth 1 origin bridges 2>/dev/null; then
+            git show FETCH_HEAD:bridges.json > "$RUNNER_TEMP/b.json" &&
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$RUNNER_TEMP/b.json" &&
+            cp "$RUNNER_TEMP/b.json" app/src/main/assets/bridges.json && echo "Embedded fresh bridges."
+          else
+            echo "No bridges branch yet, using the bundled list."
+          fi
+
       - name: Download Xray & Hysteria2 binaries (ARM64)
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
@@ -152,7 +170,7 @@ jobs:
 
   worker:
     needs: [apply-zip, keys]
-    if: ${{ always() && needs.keys.result == 'success' }}
+    if: ${{ always() && needs.keys.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -176,3 +194,27 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
         run: bash tools/deploy_worker.sh
+
+  bridges:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.task != 'build') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Collect bridges
+        run: python3 tools/collect_bridges.py --out "$RUNNER_TEMP/bridges-out"
+      - name: Publish to "bridges" branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          out="$RUNNER_TEMP/bridges-out"
+          [ -f "$out/bridges.json" ] || exit 0
+          cd "$out"
+          git init -q
+          git checkout -q -b bridges
+          git add -A
+          git -c user.name="ucx-bot" -c user.email="ucx-bot@users.noreply.github.com" commit -q -m "Update bridges $(date -u +%FT%TZ) [skip ci]"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" bridges

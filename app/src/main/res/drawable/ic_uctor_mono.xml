@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- لوگوی UC Tor (U سه‌گره‌ای) به‌صورت تک‌رنگ و تنگ‌شده روی خود طرح؛ برای دکمه‌ی اتصال، هدر و نوتیفیکیشن. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="68" android:viewportHeight="68">
+    <group android:translateX="-21" android:translateY="-19">
+        <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="6" android:strokeLineCap="round"
+            android:pathData="M30,36C30,62 38,74 54,74C70,74 78,62 78,36" />
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M30,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M54,74m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
+        <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="4"
+            android:pathData="M78,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    </group>
+</vector>

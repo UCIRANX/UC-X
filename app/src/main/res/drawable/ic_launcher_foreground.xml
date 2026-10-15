@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- حرف U از مسیر سه‌گره‌ای (ورودی، میانی، خروجی) مثل سه رله‌ی Tor. گره‌ی چپ پر، پایین سفید، راست توخالی.
+     کل طرح کمی کوچک می‌شود (۰٫۹) تا در همه‌ی ماسک‌های آیکون تطبیقی (دایره، قطره، مربع‌گرد) بریده نشود. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="0.9" android:scaleY="0.9" android:pivotX="54" android:pivotY="54">
+        <path
+            android:fillColor="#00000000"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:pathData="M30,36C30,62 38,74 54,74C70,74 78,62 78,36">
+            <aapt:attr name="android:strokeColor">
+                <gradient android:type="linear"
+                    android:startX="30" android:startY="0"
+                    android:endX="78" android:endY="0">
+                    <item android:offset="0" android:color="#FF8B5CF6" />
+                    <item android:offset="1" android:color="#FF22D3EE" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FF8B5CF6"
+            android:pathData="M30,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M54,74m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
+        <path android:fillColor="#FF14112B" android:strokeColor="#FF22D3EE" android:strokeWidth="4"
+            android:pathData="M78,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    </group>
+</vector>
