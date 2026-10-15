@@ -1,4 +1,4 @@
-name: Build Clean MultiCore VPN
+name: Build MultiCore VPN (Xray + Hysteria2 + Tor + Full TUN)
 
 on:
   push:
@@ -27,6 +27,11 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Install Android SDK 36 & Build Tools
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"
+
       - name: Generate Permanent Keystore
         run: |
           mkdir -p keystore
@@ -38,26 +43,28 @@ jobs:
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
 
-          # 1. Xray-core
           curl -L --retry 3 -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-android-arm64-v8a.zip"
           unzip -o xray.zip -d xray_extracted
           mv xray_extracted/xray app/src/main/jniLibs/arm64-v8a/libxray.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libxray.so
           rm -rf xray.zip xray_extracted
 
-          # 2. Hysteria2
           curl -L --retry 3 -o app/src/main/jniLibs/arm64-v8a/libhysteria.so "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm64"
           chmod +x app/src/main/jniLibs/arm64-v8a/libhysteria.so
 
-          ls -lh app/src/main/jniLibs/arm64-v8a/
-
-      - name: Accept Android SDK Licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+      - name: Download Official hev-socks5-tunnel AAR (Full TUN)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p app/libs
+          URL=$(gh api repos/heiher/hev-socks5-tunnel/releases/latest --jq '.assets[] | select(.name | endswith(".aar")) | .browser_download_url' | head -n 1 || true)
+          curl -fL --retry 3 "$URL" -o app/libs/hev-socks5-tunnel.aar
+          ls -lh app/libs/
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.11.1'
 
       - name: Build Signed APK
         run: gradle assembleDebug --stacktrace
@@ -65,5 +72,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MultiCoreVPN-Signed
+          name: MultiCoreVPN-FullTUN-Tor-Signed
           path: app/build/outputs/apk/debug/*.apk
