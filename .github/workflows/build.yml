@@ -1,58 +1,138 @@
-name: Build MultiCore VPN (Xray + Hysteria2 + Tor + Full TUN)
+name: UC-X
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+concurrency:
+  group: ucx-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build:
+  apply-zip:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
+    outputs:
+      applied: ${{ steps.apply.outputs.applied }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.WORKFLOW_TOKEN || github.token }}
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Install Android SDK 36 & Build Tools
+      - name: Extract uploaded zip and replace project files
+        id: apply
+        shell: bash
+        env:
+          HAS_PAT: ${{ secrets.WORKFLOW_TOKEN != '' }}
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          set -euo pipefail
+          shopt -s nullglob
+          zips=( *.zip )
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "No zip uploaded, nothing to apply."
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command -v rsync >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq rsync; }
+          git config user.name "ucx-bot"
+          git config user.email "ucx-bot@users.noreply.github.com"
+          stash="$RUNNER_TEMP/zips"; mkdir -p "$stash"
+          for z in "${zips[@]}"; do mv "$z" "$stash/"; done
+          for z in "$stash"/*.zip; do
+            echo "::group::Applying $(basename "$z")"
+            tmp="$(mktemp -d)"
+            unzip -q -o "$z" -d "$tmp"
+            src="$tmp"
+            mapfile -t top < <(find "$tmp" -mindepth 1 -maxdepth 1 ! -name '__MACOSX')
+            if [ ${#top[@]} -eq 1 ] && [ -d "${top[0]}" ]; then src="${top[0]}"; fi
+            excludes=(--exclude '.git/' --exclude 'signing/' --exclude '*.zip' --exclude '__MACOSX/')
+            if [ "$HAS_PAT" != "true" ]; then
+              excludes+=(--exclude '.github/workflows/')
+              if [ -d "$src/.github/workflows" ] && ! diff -rq "$src/.github/workflows" .github/workflows >/dev/null 2>&1; then
+                echo "::warning::فایل‌های workflow داخل زیپ تغییر کرده‌اند ولی Secret به نام WORKFLOW_TOKEN نیست. آن‌ها اعمال نشدند."
+              fi
+            fi
+            rsync -a --delete "${excludes[@]}" "$src"/ ./
+            echo "::endgroup::"
+          done
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Zip contained no changes."
+          else
+            git commit -q -m "Apply uploaded zip [skip ci]"
+            git push -q origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+
+  keys:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Create once or restore signing keys
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/keys.sh
+
+  build:
+    needs: [apply-zip, keys]
+    if: ${{ always() && needs.keys.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Install Android SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"
 
-      - name: Generate Permanent Keystore
+      - name: Restore signing keys
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/keys.sh
+
+      - name: Embed license public key
         run: |
-          mkdir -p keystore
-          if [ ! -f "keystore/app.jks" ]; then
-            keytool -genkeypair -v -keystore keystore/app.jks -keyalg RSA -keysize 2048 -validity 10000 -alias multivpn -storepass MultiVpnPassword123 -keypass MultiVpnPassword123 -dname "CN=MultiVPN"
+          f=app/src/main/java/com/multivpn/app/security/LicenseManager.kt
+          sed -i "s|PASTE_PUBLIC_KEY_HERE|${LICENSE_PUBLIC_KEY_B64}|" "$f"
+          if grep -q PASTE_PUBLIC_KEY_HERE "$f"; then
+            echo "::error::کلید عمومی لایسنس جایگذاری نشد"
+            exit 1
           fi
 
-      - name: Download Xray & Hysteria2 Binaries (ARM64)
+      - name: Download Xray & Hysteria2 binaries (ARM64)
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-
           curl -L --retry 3 -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-android-arm64-v8a.zip"
           unzip -o xray.zip -d xray_extracted
           mv xray_extracted/xray app/src/main/jniLibs/arm64-v8a/libxray.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libxray.so
           rm -rf xray.zip xray_extracted
-
           curl -L --retry 3 -o app/src/main/jniLibs/arm64-v8a/libhysteria.so "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm64"
           chmod +x app/src/main/jniLibs/arm64-v8a/libhysteria.so
 
-      - name: Download Official hev-socks5-tunnel AAR (Full TUN)
+      - name: Download hev-socks5-tunnel AAR
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -61,16 +141,38 @@ jobs:
           curl -fL --retry 3 "$URL" -o app/libs/hev-socks5-tunnel.aar
           ls -lh app/libs/
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
+      - name: Build signed release APK
+        run: gradle assembleRelease --stacktrace
 
-      - name: Build Signed APK
-        run: gradle assembleDebug --stacktrace
-
-      - name: Upload APK Artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MultiCoreVPN-FullTUN-Tor-Signed
-          path: app/build/outputs/apk/debug/*.apk
+          name: UC-X-release
+          path: app/build/outputs/apk/release/*.apk
+
+  worker:
+    needs: [apply-zip, keys]
+    if: ${{ always() && needs.keys.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore signing keys
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/keys.sh
+
+      - name: Deploy license bot to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+        run: bash tools/deploy_worker.sh
