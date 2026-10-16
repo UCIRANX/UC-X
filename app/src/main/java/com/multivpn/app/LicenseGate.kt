@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -78,7 +79,9 @@ fun LicenseGate(status: LicenseStatus, onActivated: (LicenseStatus) -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text("شناسه دستگاه", fontSize = 12.sp, color = Color(0xFFB4B4C8))
-                        Text(deviceId, fontWeight = FontWeight.Bold, fontSize = 18.sp, style = LtrStyle)
+                        SelectionContainer {
+                            Text(deviceId, fontWeight = FontWeight.Bold, fontSize = 18.sp, style = LtrStyle)
+                        }
                     }
                     TextButton(onClick = {
                         val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

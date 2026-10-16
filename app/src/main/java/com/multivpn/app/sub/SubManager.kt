@@ -21,10 +21,15 @@ data class VpnConfig(
 object SubManager {
     private const val KEY_CACHED_RAW_SUB = "cached_raw_sub_content"
 
-    // آدرس ساب‌لینک اختصاصی شما
+    // ساب‌لینک‌های اختصاصی؛ UCX.txt فهرستی از ساب‌لینک‌های دیگر است و در هر بروزرسانی بررسی می‌شود
     private val SUBSCRIPTION_URLS = listOf(
-        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt"
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt",
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/Uciran.txt",
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/Uciranir.txt",
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt"
     )
+
+    private const val MAX_NESTED_DEPTH = 2
 
     fun loadCachedConfigs(context: Context): List<VpnConfig> {
         val cached = TimeGuard.getSecurePrefs(context).getString(KEY_CACHED_RAW_SUB, null)
@@ -34,15 +39,10 @@ object SubManager {
     fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> = loadCachedConfigs(context)
 
     suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
-        val combinedRaw = StringBuilder()
-        for (url in SUBSCRIPTION_URLS) {
-            try {
-                val text = DohClient.fetchUrlText(url)
-                combinedRaw.append(decodeSubscriptionText(text)).append("\n")
-            } catch (_: Exception) {
-            }
-        }
-        val finalRaw = combinedRaw.toString()
+        val out = StringBuilder()
+        val visited = mutableSetOf<String>()
+        for (url in SUBSCRIPTION_URLS) collectFromUrl(url, 0, visited, out)
+        val finalRaw = out.toString()
         if (finalRaw.isBlank()) {
             throw Exception("عدم دسترسی به سرور ساب‌لینک")
         }
@@ -51,6 +51,36 @@ object SubManager {
             TimeGuard.getSecurePrefs(context).edit().putString(KEY_CACHED_RAW_SUB, finalRaw).apply()
         }
         return configs
+    }
+
+    /** یک آدرس را می‌خواند؛ خطوط http(s) داخل آن، ساب‌لینک‌های تودرتو هستند و دوباره بررسی می‌شوند. */
+    private suspend fun collectFromUrl(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder) {
+        if (depth > MAX_NESTED_DEPTH || !visited.add(url)) return
+        val text = try {
+            DohClient.fetchUrlText(url)
+        } catch (_: Exception) {
+            return
+        }
+        for (rawLine in decodeSubscriptionText(text).lines()) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            if (line.startsWith("http://", ignoreCase = true) || line.startsWith("https://", ignoreCase = true)) {
+                collectFromUrl(line, depth + 1, visited, out)
+            } else if (line.contains("://")) {
+                out.append(line).append('\n')
+            }
+        }
+    }
+
+    /** کلید یکتا برای هر کانفیگ: بدون نام (بخش # ) و با پارامترهای مرتب‌شده. */
+    private fun dedupKey(c: VpnConfig): String {
+        val raw = c.rawConfig.substringBefore("#").trim()
+        val scheme = raw.substringBefore("://").lowercase()
+        val rest = raw.substringAfter("://")
+        val authority = rest.substringBefore("?").trimEnd('/')
+        val query = if (rest.contains("?")) rest.substringAfter("?") else ""
+        val params = query.split("&").filter { it.isNotBlank() }.sorted().joinToString("&")
+        return "$scheme://$authority?$params"
     }
 
     private fun decodeSubscriptionText(rawText: String): String {
@@ -96,7 +126,8 @@ object SubManager {
                 list.add(parsed)
             }
         }
-        return list
+        val seen = HashSet<String>()
+        return list.filter { seen.add(dedupKey(it)) }
     }
 
     private fun parseGenericUri(uriStr: String, protocol: String, coreType: String): VpnConfig? {

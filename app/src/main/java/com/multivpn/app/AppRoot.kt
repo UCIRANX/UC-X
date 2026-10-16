@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -114,7 +115,9 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("شناسه ", color = TextSub, fontSize = 12.sp, style = ContentStyle)
-                    Text(deviceId, color = TextSub, fontSize = 12.sp, style = LtrStyle)
+                    SelectionContainer {
+                        Text(deviceId, color = TextSub, fontSize = 12.sp, style = LtrStyle)
+                    }
                     Text("  ·  ", color = TextSub, fontSize = 12.sp, style = ContentStyle)
                     Text(remaining, color = TextSub, fontSize = 12.sp, style = ContentStyle)
                 }

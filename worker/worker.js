@@ -3,6 +3,7 @@
 
 const TOKEN_PREFIX = "MV3-";
 const LICENSE_SECONDS = 5 * 86400;   // مدت اعتبار هر کد
+const LONG_LICENSE_SECONDS = 10 * 365 * 86400; // کد ویژهٔ ادمین (۱۰ سال)
 const RENEW_BEFORE_SEC = 24 * 3600;  // کد جدید از ۲۴ ساعت قبل از پایان مهلت قابل گرفتن است
 const REQUIRED_POSTS = 2;            // تعداد پست‌های لازم برای هر کد جدید
 const PENDING_TTL_SEC = 1800;        // مهلت ارسال پست‌ها (۳۰ دقیقه)
@@ -77,6 +78,7 @@ async function handleMessage(msg, env) {
   }
 
   if (text.startsWith("/unbind")) return handleUnbind(msg, env, text);
+  if (text.startsWith("/long")) return handleLong(msg, env, text);
 
   if (text.startsWith("/")) return send(env, chatId, helpText(channel));
 
@@ -192,6 +194,24 @@ async function handleUnbind(msg, env, text) {
   return send(env, chatId, `اتصال ${formatDeviceId(deviceId)} آزاد شد.`);
 }
 
+// دستور ادمین: کد ۱۰ ساله برای یک شناسه دستگاه؛ فقط برای ادمین ارسال می‌شود
+async function handleLong(msg, env, text) {
+  const chatId = msg.chat.id;
+  if (!env.ADMIN_ID || String(msg.from.id) !== String(env.ADMIN_ID)) {
+    return send(env, chatId, "دسترسی ندارید.");
+  }
+  const deviceId = normalizeDeviceId(text.split(/\s+/)[1] || "");
+  if (!deviceId) return send(env, chatId, "فرمت: /long XXXX-XXXX");
+
+  const { token, expiry } = await issueToken(env, deviceId, LONG_LICENSE_SECONDS);
+  const dev = (await getJSON(env.STATE, `dev:${deviceId}`)) || { tg: null, lastPost: 0 };
+  dev.token = token;
+  dev.expiry = expiry;
+  await env.STATE.put(`dev:${deviceId}`, JSON.stringify(dev));
+  return send(env, chatId,
+    `کد ۱۰ ساله برای ${formatDeviceId(deviceId)}:\n<code>${token}</code>\nاعتبار تا: <b>${fmtDate(expiry)}</b>`);
+}
+
 // ---------- کمک‌کننده‌ها ----------
 
 function normalizeDeviceId(raw) {
@@ -233,8 +253,8 @@ async function isMember(env, userId, channel) {
          (s === "restricted" && data.result.is_member === true);
 }
 
-async function issueToken(env, deviceId) {
-  const expiry = Math.floor(Date.now() / 1000) + LICENSE_SECONDS;
+async function issueToken(env, deviceId, seconds = LICENSE_SECONDS) {
+  const expiry = Math.floor(Date.now() / 1000) + seconds;
 
   // پِی‌لود ۱۶ بایتی: ۸ بایت شناسه (ASCII) + ۸ بایت زمان انقضا (Big-Endian)
   const payload = new Uint8Array(16);

@@ -11,7 +11,7 @@ object CoreConfigGenerator {
     const val LOCAL_HTTP_PORT = 10809
     const val BATCH_BASE_PORT = 11000
 
-    fun buildBatchPingXrayJson(batch: List<Pair<VpnConfig, String>>): String {
+    fun buildBatchPingXrayJson(batch: List<Pair<VpnConfig, String>>, portBase: Int = BATCH_BASE_PORT): String {
         val root = JSONObject()
         root.put("log", JSONObject().apply { put("loglevel", "none") })
 
@@ -21,7 +21,7 @@ object CoreConfigGenerator {
 
         batch.forEachIndexed { index, (cfg, resolvedIp) ->
             try {
-                val port = BATCH_BASE_PORT + index
+                val port = portBase + index
                 val inTag = "in-$index"
                 val outTag = "out-$index"
 
