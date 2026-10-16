@@ -22,19 +22,20 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * تست پینگ واقعی مثل v2rayNG (Test real delay):
- * - بدون بررسی TCP مقدماتی؛ هر سرور مستقیم با درخواست HTTP از داخل تونل تست می‌شود.
- * - Xray برای VLESS/SS/VMess/Trojan؛ Hysteria2 با فرایند جدا برای hy2.
- * - نتیجهٔ هر سرور همان لحظه‌ای که آماده شود اعلام می‌شود.
+ * تست پینگ واقعی به روش v2rayNG (Test real delay):
+ * هر سرور با یک درخواست HTTP از داخل تونل سنجیده می‌شود، بدون بررسی TCP.
+ * اگر یک دسته کانفیگ بالا نیاید، دسته نصف می‌شود تا کانفیگ خراب بقیه را از بین نبرد.
+ * Hysteria2 با فرایند جدا تست می‌شود.
  */
 object PingTester {
-    private const val XRAY_BATCH = 40          // کانفیگ در هر فرایند Xray
-    private const val XRAY_PARALLEL = 4        // دسته‌های هم‌زمان Xray
-    private const val PORTS_PER_SLOT = 64      // بازهٔ پورت هر اسلات Xray
-    private const val HY2_PARALLEL = 6         // فرایندهای هم‌زمان Hysteria2
+    private const val XRAY_BATCH = 40
+    private const val XRAY_PARALLEL = 4
+    private const val PORTS_PER_SLOT = 64
+    private const val HY2_PARALLEL = 6
     private const val HY2_PORT_BASE = 12500
-    private const val TIMEOUT_SEC = 5L
+    private const val TIMEOUT_SEC = 4L
     private const val TEST_URL = "http://www.gstatic.com/generate_204"
+    private const val READY_WAIT_MS = 3000L
 
     private val baseClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -46,7 +47,7 @@ object PingTester {
             .build()
     }
 
-    /** یک درخواست از طریق پروکسی؛ زمان بر حسب میلی‌ثانیه یا -1 در صورت خطا. */
+    /** یک درخواست از طریق پروکسی؛ زمان به میلی‌ثانیه یا -1 در صورت خطا. */
     private fun probe(proxy: Proxy): Long {
         return try {
             val client = baseClient.newBuilder().proxy(proxy).build()
@@ -63,18 +64,20 @@ object PingTester {
         }
     }
 
-    private suspend fun isPortListening(port: Int, waitMs: Long): Boolean {
-        val end = System.currentTimeMillis() + waitMs
+    private suspend fun portOpen(port: Int): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun waitReady(proc: Process, port: Int): Boolean {
+        val end = System.currentTimeMillis() + READY_WAIT_MS
         while (System.currentTimeMillis() < end) {
-            val open = withContext(Dispatchers.IO) {
-                try {
-                    Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) }
-                    true
-                } catch (_: Exception) {
-                    false
-                }
-            }
-            if (open) return true
+            if (!proc.isAlive) return false
+            if (portOpen(port)) return true
             delay(100L)
         }
         return false
@@ -137,7 +140,7 @@ object PingTester {
                     gate.withPermit {
                         val slot = freeSlots.poll() ?: 0
                         try {
-                            pingXrayBatch(context, nativeDir, xrayBinary, batch, slot, results, emit)
+                            pingGroup(context, nativeDir, xrayBinary, batch, slot, results, emit)
                         } finally {
                             freeSlots.add(slot)
                         }
@@ -147,22 +150,30 @@ object PingTester {
         }
     }
 
-    private suspend fun pingXrayBatch(
+    /** یک گروه را با یک فرایند Xray می‌سنجد؛ اگر بالا نیاید، نصف می‌شود و دوباره امتحان می‌شود. */
+    private suspend fun pingGroup(
         context: Context,
         nativeDir: String,
         xrayBinary: File,
-        batch: List<VpnConfig>,
+        group: List<VpnConfig>,
         slot: Int,
         results: ConcurrentHashMap<String, Long>,
         emit: (VpnConfig) -> Unit,
     ) {
+        if (group.isEmpty()) return
         val portBase = CoreConfigGenerator.BATCH_BASE_PORT + slot * PORTS_PER_SLOT
-        val valid = mutableListOf<Pair<VpnConfig, String>>()
-        for (cfg in batch) {
-            try {
+
+        val valid = mutableListOf<VpnConfig>()
+        for (cfg in group) {
+            val ok = try {
                 CoreConfigGenerator.buildMainOutbound(cfg, cfg.host)
-                valid.add(cfg to cfg.host)
+                true
             } catch (_: Exception) {
+                false
+            }
+            if (ok) {
+                valid.add(cfg)
+            } else {
                 results[cfg.id] = -2L
                 emit(cfg.copy(pingMs = -2L))
             }
@@ -170,32 +181,49 @@ object PingTester {
         if (valid.isEmpty()) return
 
         var proc: Process? = null
+        var ready = false
         try {
             val file = File(context.filesDir, "batch_ping_$slot.json")
-            file.writeText(CoreConfigGenerator.buildBatchPingXrayJson(valid, portBase), Charsets.UTF_8)
+            file.writeText(
+                CoreConfigGenerator.buildBatchPingXrayJson(valid.map { it to it.host }, portBase),
+                Charsets.UTF_8
+            )
             proc = ProcessBuilder(xrayBinary.absolutePath, "run", "-c", file.absolutePath).apply {
                 environment()["XRAY_LOCATION_ASSET"] = nativeDir
                 directory(context.filesDir)
                 redirectErrorStream(true)
             }.start()
-            isPortListening(portBase, 3000L)
+            ready = waitReady(proc, portBase + valid.size - 1)
 
-            coroutineScope {
-                valid.mapIndexed { i, pair ->
-                    async {
-                        val cfg = pair.first
-                        val raw = withContext(Dispatchers.IO) {
-                            probe(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", portBase + i)))
+            if (ready) {
+                coroutineScope {
+                    valid.mapIndexed { i, cfg ->
+                        async {
+                            val raw = withContext(Dispatchers.IO) {
+                                probe(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", portBase + i)))
+                            }
+                            val ping = if (raw > 0) raw else -2L
+                            results[cfg.id] = ping
+                            emit(cfg.copy(pingMs = ping))
                         }
-                        val ping = if (raw > 0) raw else -2L
-                        results[cfg.id] = ping
-                        emit(cfg.copy(pingMs = ping))
-                    }
-                }.awaitAll()
+                    }.awaitAll()
+                }
             }
         } catch (_: Exception) {
+            ready = false
         } finally {
             try { proc?.destroy(); proc?.destroyForcibly() } catch (_: Exception) {}
+        }
+
+        if (!ready) {
+            if (valid.size == 1) {
+                results[valid[0].id] = -2L
+                emit(valid[0].copy(pingMs = -2L))
+            } else {
+                val mid = valid.size / 2
+                pingGroup(context, nativeDir, xrayBinary, valid.subList(0, mid), slot, results, emit)
+                pingGroup(context, nativeDir, xrayBinary, valid.subList(mid, valid.size), slot, results, emit)
+            }
         }
     }
 
@@ -225,7 +253,7 @@ object PingTester {
                                 directory(context.filesDir)
                                 redirectErrorStream(true)
                             }.start()
-                            if (isPortListening(port, 4000L)) {
+                            if (waitReady(proc, port)) {
                                 val raw = withContext(Dispatchers.IO) {
                                     probe(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
                                 }
