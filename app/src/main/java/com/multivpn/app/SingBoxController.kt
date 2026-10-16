@@ -214,6 +214,7 @@ object SingBoxController {
             status = "سروری برای اتصال وجود ندارد"
             return
         }
+        stopGuardIfActive(ctx)
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
         val wasActive = connected || connecting
         if (wasActive) stop(ctx, "در حال تغییر سرور…")

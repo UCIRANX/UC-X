@@ -172,6 +172,28 @@ jobs:
             echo "libc++_shared.so is dynamic; it will be bundled from the NDK"
           fi
 
+      - name: Build hev-guard tunnel (JNI for the Guard VPN)
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          rm -rf "$RUNNER_TEMP/hev" && mkdir -p "$RUNNER_TEMP/hev"
+          git clone --recursive --depth 1 https://github.com/heiher/hev-socks5-tunnel "$RUNNER_TEMP/hev/jni"
+          cd "$RUNNER_TEMP/hev"
+          for sig in '"TProxyStartService", "(Ljava/lang/String;I)Z"' '"TProxyStopService", "()Z"' '"TProxyIsRunning", "()Z"' '"TProxyGetStats", "()[J"'; do
+            if ! grep -qF "$sig" jni/src/hev-jni.c; then
+              echo "::error::hev-socks5-tunnel changed its JNI method $sig"; exit 1
+            fi
+          done
+          "$NDK/ndk-build" \
+            NDK_PROJECT_PATH=. \
+            APP_BUILD_SCRIPT=jni/Android.mk \
+            NDK_APPLICATION_MK=jni/Application.mk \
+            APP_ABI=${{ matrix.abi }} \
+            APP_PLATFORM=android-24 \
+            "APP_CFLAGS=-O3 -DPKGNAME=ir/uciranx/ucg/core -DCLSNAME=TProxyService" \
+            -j"$(nproc)"
+          ls -la libs/${{ matrix.abi }}
+
       - name: Stage native binaries
         working-directory: aether
         env:
@@ -182,6 +204,8 @@ jobs:
           cp "target/$RUST_TARGET/release/aether" "$out/libaether.so"
           cpp="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$NDK_TRIPLE/libc++_shared.so"
           if [ -f "$cpp" ]; then cp "$cpp" "$out/libc++_shared.so"; else echo "::warning::libc++_shared.so not found at $cpp"; fi
+          hev="$RUNNER_TEMP/hev/libs/${{ matrix.abi }}/libhev-socks5-tunnel.so"
+          if [ -f "$hev" ]; then cp "$hev" "$out/libhev-guard.so"; else echo "::error::hev-guard was not built"; exit 1; fi
           for f in pt/*; do
             [ -f "$f" ] || continue
             n=$(basename "$f"); n="${n%.exe}"

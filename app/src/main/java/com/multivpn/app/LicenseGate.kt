@@ -52,7 +52,7 @@ fun LicenseGate(status: LicenseStatus, onActivated: (LicenseStatus) -> Unit) {
     val reason = when (status) {
         is LicenseStatus.Expired -> status.message
         is LicenseStatus.Invalid -> status.reason
-        LicenseStatus.Missing -> "برای استفاده، کد ۵ روزه را وارد کنید."
+        LicenseStatus.Missing -> "برای استفاده، کد لایسنس را وارد کنید."
         is LicenseStatus.Valid -> ""
     }
 
@@ -62,7 +62,7 @@ fun LicenseGate(status: LicenseStatus, onActivated: (LicenseStatus) -> Unit) {
         containerColor = Surface1,
         title = {
             Text(
-                if (status is LicenseStatus.Expired) "مهلت تمام شد" else "فعال‌سازی UC-X",
+                if (status is LicenseStatus.Expired) "مهلت تمام شد" else "فعال‌سازی UC X",
                 fontWeight = FontWeight.Bold,
             )
         },
@@ -89,10 +89,12 @@ fun LicenseGate(status: LicenseStatus, onActivated: (LicenseStatus) -> Unit) {
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
-                    label = { Text("کد ربات (MV3-...)") },
+                    label = { Text("کد لایسنس") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Text("کد را از ربات @uciranxbot دریافت کنید.", color = Color(0xFFB4B4C8), fontSize = 13.sp)
+                TextButton(onClick = { openLicenseBot(context) }) { Text("ورود به ربات") }
                 if (message.isNotBlank()) {
                     Text(message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                 }

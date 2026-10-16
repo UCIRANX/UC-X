@@ -23,6 +23,11 @@ import ir.uciran.uctor.Prefs
 import ir.uciran.uctor.TorController
 import ir.uciran.uctor.VpnController
 import ir.uciran.uctor.ui.UcTorTheme
+import ir.uciranx.ucg.core.Notifications
+import ir.uciranx.ucg.core.StateBus
+import ir.uciranx.ucg.core.UcgVpnService
+import ir.uciranx.ucg.core.VpnState
+import ir.uciranx.ucg.data.SettingsStore
 
 class MainActivity : ComponentActivity() {
     private val vpnReceiver = object : BroadcastReceiver() {
@@ -67,6 +72,30 @@ class MainActivity : ComponentActivity() {
         if (intent != null) vpnPermission.launch(intent) else FullVpnService.start(this)
     }
 
+    private val guardVpnPermission =
+        registerForActivityResult(StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                UcgVpnService.send(this, UcgVpnService.ACTION_CONNECT)
+            } else {
+                StateBus.state.value = VpnState.Failed("اجازه VPN داده نشد.")
+            }
+        }
+
+    private fun initGuard() {
+        StateBus.init(applicationContext)
+        SettingsStore.init(applicationContext)
+        Notifications.createChannel(applicationContext)
+    }
+
+    /** اتصال گارد: سینگ باکس و تور قبلاً قطع می‌شوند، چون هر سه VPN سراسری لازم دارند. */
+    fun guardConnect() {
+        SingBoxController.stop(this, "سینگ باکس برای اتصال گارد قطع شد")
+        if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
+        val consent = VpnService.prepare(this)
+        if (consent != null) guardVpnPermission.launch(consent)
+        else UcgVpnService.send(this, UcgVpnService.ACTION_CONNECT)
+    }
+
     override fun onDestroy() {
         runCatching { unregisterReceiver(vpnReceiver) }
         super.onDestroy()
@@ -90,11 +119,12 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightNavigationBars = false
         }
         TorController.init(applicationContext)
+        initGuard()
         SubUpdate.schedule(applicationContext)
         ContextCompat.registerReceiver(
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        setContent { UcTorTheme { AppRoot() } }
+        setContent { UcTorTheme { AppRoot(onGuardConnect = ::guardConnect) } }
         window.decorView.post { requestVpnThenNotification() }
     }
 }

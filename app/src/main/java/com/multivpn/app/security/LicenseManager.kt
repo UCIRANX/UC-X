@@ -42,6 +42,11 @@ object LicenseManager {
         return status
     }
 
+    /** حذف کد ذخیره‌شده از گوشی. */
+    fun clearSavedToken(context: Context) {
+        TimeGuard.getSecurePrefs(context).edit().remove(KEY_SAVED_TOKEN).apply()
+    }
+
     fun getCurrentLicenseStatus(context: Context): LicenseStatus {
         val saved = TimeGuard.getSecurePrefs(context).getString(KEY_SAVED_TOKEN, null)
         if (saved.isNullOrBlank()) return LicenseStatus.Missing
@@ -100,7 +105,7 @@ object LicenseManager {
         val remaining = expiryEpoch - nowSec
 
         return if (remaining <= 0L) {
-            LicenseStatus.Expired("مهلت استفاده ۵ روزه این کد تمام شده است. از ربات تلگرام کد جدید بگیرید.")
+            LicenseStatus.Expired("مهلت این کد تمام شده است. کد جدید را از ربات @uciranxbot دریافت کنید.")
         } else {
             LicenseStatus.Valid(remainingSeconds = remaining, expiryEpochSec = expiryEpoch)
         }

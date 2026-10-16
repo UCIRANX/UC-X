@@ -46,21 +46,24 @@ import ir.uciran.uctor.ui.Bg
 import ir.uciran.uctor.ui.MainScreen
 import ir.uciran.uctor.ui.Surface1
 import ir.uciran.uctor.ui.Violet
+import ir.uciranx.ucg.ui.GuardRoot
+import ir.uciranx.ucg.ui.UcgTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
-enum class AppMode(val label: String) { VPN("سینگ باکس"), TOR("تور") }
+enum class AppMode(val label: String) { VPN("سینگ باکس"), TOR("تور"), GUARD("گارد") }
 
 private val TextSub = Color(0xFFB4B4C8)
 
 @Composable
-fun AppRoot() {
+fun AppRoot(onGuardConnect: () -> Unit = {}) {
     val context = LocalContext.current
     val torState by TorController.state.collectAsStateWithLifecycle()
     val torPhase = torState.phase
     var mode by rememberSaveable { mutableStateOf(AppMode.VPN) }
     var license by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
+    var showManage by remember { mutableStateOf(false) }
     val valid = license is LicenseStatus.Valid
     val deviceId = remember { DeviceIdProvider.getFormattedDeviceId(context) }
 
@@ -75,6 +78,7 @@ fun AppRoot() {
             val nowValid = now is LicenseStatus.Valid
             if (wasValid && !nowValid) {
                 SingBoxController.stop(context, "مهلت لایسنس تمام شد")
+                stopGuardIfActive(context)
                 TorController.disconnect()
             }
             wasValid = nowValid
@@ -86,6 +90,7 @@ fun AppRoot() {
     LaunchedEffect(torPhase) {
         if (torPhase == Phase.CONNECTING) {
             SingBoxController.stop(context, "سینگ باکس برای اتصال تور قطع شد")
+            stopGuardIfActive(context)
         }
     }
 
@@ -104,7 +109,7 @@ fun AppRoot() {
             ) {
                 ModeSwitch(mode = mode, onChange = { mode = it })
                 Row(
-                    Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    Modifier.fillMaxWidth().padding(bottom = 6.dp).clickable(enabled = valid) { showManage = true },
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -117,10 +122,16 @@ fun AppRoot() {
                     when (mode) {
                         AppMode.VPN -> VpnScreen(licenseValid = valid)
                         AppMode.TOR -> MainScreen()
+                        AppMode.GUARD -> UcgTheme { GuardRoot(onConnect = onGuardConnect) }
                     }
                 }
             }
             if (!valid) LicenseGate(status = license, onActivated = { license = it })
+            if (showManage && valid) LicenseManageDialog(
+                status = license,
+                onDismiss = { showManage = false },
+                onChanged = { license = it },
+            )
         }
     }
 }

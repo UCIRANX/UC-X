@@ -3,6 +3,7 @@
 
 const TOKEN_PREFIX = "MV3-";
 const LICENSE_SECONDS = 5 * 86400;   // مدت اعتبار هر کد
+const RENEW_BEFORE_SEC = 24 * 3600;  // کد جدید از ۲۴ ساعت قبل از پایان مهلت قابل گرفتن است
 const REQUIRED_POSTS = 2;            // تعداد پست‌های لازم برای هر کد جدید
 const PENDING_TTL_SEC = 1800;        // مهلت ارسال پست‌ها (۳۰ دقیقه)
 const DEVICE_ID_RE = /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/;
@@ -47,6 +48,8 @@ function helpText(channel) {
     `۱. ابتدا در کانال @${channel} عضو شوید.\n` +
     "۲. شناسه ۸ حرفی دستگاه را از بخش «شناسه گوشی» برنامه کپی کرده و بفرستید.\n" +
     `۳. ${REQUIRED_POSTS} پست جدید از کانال را برای این ربات فوروارد کنید.\n\n` +
+    "🔁 به‌صورت نامحدود می‌توانید هر ۵ روز یک بار کد جدید بگیرید.\n" +
+    "⏰ ۲۴ ساعت قبل از پایان مهلت کد فعلی، می‌توانید کد جدید بگیرید.\n\n" +
     "کد دریافتی را در برنامه، بخش «کد لایسنس» وارد کنید."
   );
 }
@@ -101,9 +104,10 @@ async function handleDeviceId(msg, env, channel, text) {
 
   // کد فعلی هنوز معتبر است: همان کد دوباره فرستاده می‌شود
   const now = Math.floor(Date.now() / 1000);
-  if (dev && dev.tg && dev.expiry > now) {
+  if (dev && dev.tg && dev.expiry - now > RENEW_BEFORE_SEC) {
     return send(env, chatId,
-      `کد فعلی شما هنوز معتبر است تا <b>${fmtDate(dev.expiry)}</b>:\n<code>${dev.token}</code>`);
+      `کد فعلی شما هنوز معتبر است تا <b>${fmtDate(dev.expiry)}</b>:\n<code>${dev.token}</code>\n\n` +
+      `⏰ ۲۴ ساعت قبل از پایان مهلت می‌توانید کد جدید بگیرید.`);
   }
 
   // کد منقضی شده: برای کد جدید باید پست‌های جدیدتر از آخرین صدور فوروارد شوند
@@ -163,9 +167,10 @@ async function handleForwardedPost(msg, env, channel, postId) {
   await env.STATE.delete(key);
 
   return send(env, chatId,
-    `✅ کد ۵ روزه شما:\n<code>${token}</code>\n` +
+    `✅ کد لایسنس شما:\n<code>${token}</code>\n` +
     `اعتبار تا: <b>${fmtDate(expiry)}</b>\n` +
-    "این کد را در برنامه، بخش «کد لایسنس» وارد کنید.");
+    "این کد را در برنامه، بخش «کد لایسنس» وارد کنید.\n" +
+    "🔁 هر ۵ روز یک بار و نامحدود می‌توانید کد جدید بگیرید (۲۴ ساعت قبل از پایان مهلت).");
 }
 
 // دستور ادمین برای آزاد کردن یک شناسه
