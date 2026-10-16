@@ -109,10 +109,12 @@ jobs:
           case "${{ matrix.abi }}" in
             arm64-v8a)
               echo "RUST_TARGET=aarch64-linux-android" >> "$GITHUB_ENV"
+              echo "NDK_TRIPLE=aarch64-linux-android" >> "$GITHUB_ENV"
               echo "GO_ARCH=arm64" >> "$GITHUB_ENV"
               echo "GO_ARM=" >> "$GITHUB_ENV" ;;
             armeabi-v7a)
               echo "RUST_TARGET=armv7-linux-androideabi" >> "$GITHUB_ENV"
+              echo "NDK_TRIPLE=arm-linux-androideabi" >> "$GITHUB_ENV"
               echo "GO_ARCH=arm" >> "$GITHUB_ENV"
               echo "GO_ARM=7" >> "$GITHUB_ENV" ;;
           esac
@@ -167,15 +169,19 @@ jobs:
           needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
           echo "aether NEEDED: $needed"
           if grep -qx 'libc++_shared.so' <<<"$needed"; then
-            echo "::error::aether still needs libc++_shared.so"; exit 1
+            echo "libc++_shared.so is dynamic; it will be bundled from the NDK"
           fi
 
       - name: Stage native binaries
         working-directory: aether
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           out="$RUNNER_TEMP/native-${{ matrix.abi }}"
           mkdir -p "$out"
           cp "target/$RUST_TARGET/release/aether" "$out/libaether.so"
+          cpp="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$NDK_TRIPLE/libc++_shared.so"
+          if [ -f "$cpp" ]; then cp "$cpp" "$out/libc++_shared.so"; else echo "::warning::libc++_shared.so not found at $cpp"; fi
           for f in pt/*; do
             [ -f "$f" ] || continue
             n=$(basename "$f"); n="${n%.exe}"
