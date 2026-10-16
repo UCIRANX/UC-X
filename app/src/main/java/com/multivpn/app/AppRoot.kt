@@ -53,7 +53,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
-enum class AppMode(val label: String) { VPN("سینگ باکس"), TOR("تور"), GUARD("گارد") }
+enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس") }
 
 private val TextSub = Color(0xFFB4B4C8)
 
@@ -62,7 +62,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
     val context = LocalContext.current
     val torState by TorController.state.collectAsStateWithLifecycle()
     val torPhase = torState.phase
-    var mode by rememberSaveable { mutableStateOf(AppMode.VPN) }
+    var mode by rememberSaveable { mutableStateOf(AppMode.GUARD) }
     var license by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
     var showManage by remember { mutableStateOf(false) }
     val valid = license is LicenseStatus.Valid

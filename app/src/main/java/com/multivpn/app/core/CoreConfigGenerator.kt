@@ -55,7 +55,7 @@ object CoreConfigGenerator {
         return root.toString()
     }
 
-    fun buildHysteria2Json(config: VpnConfig, resolvedHostIp: String): String {
+    fun buildHysteria2Json(config: VpnConfig, resolvedHostIp: String, socksPort: Int = LOCAL_SOCKS_PORT): String {
         val raw = config.rawConfig.trim()
         val withoutScheme = raw.substringAfter("://").substringBefore("#")
         val userPass = withoutScheme.substringBefore("@")
@@ -84,7 +84,7 @@ object CoreConfigGenerator {
                 })
             }
             put("socks5", JSONObject().apply {
-                put("listen", "127.0.0.1:$LOCAL_SOCKS_PORT")
+                put("listen", "127.0.0.1:$socksPort")
             })
             put("http", JSONObject().apply {
                 put("listen", "127.0.0.1:$LOCAL_HTTP_PORT")
