@@ -42,6 +42,7 @@ object SingBoxController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var connJob: Job? = null
     private var loaded = false
+    private var awgActive = false
     private var appCtx: Context? = null
     private var loadedStamp = 0L
     private val pendingPings = LinkedHashMap<String, VpnConfig>()
@@ -176,7 +177,15 @@ object SingBoxController {
         scope.launch {
             while (isActive) {
                 delay(1000L)
-                if (connected && !CoreEngineRunner.isCoreRunning()) {
+                if (!connected) continue
+                if (awgActive) {
+                    if (MultiCoreVpnService.awgStatus.value !is AwgState.Up) {
+                        connected = false
+                        awgActive = false
+                        appCtx?.let { it.startService(stopIntent(it)) }
+                        status = "اتصال قطع شد: تونل AmneziaWG بسته شد"
+                    }
+                } else if (!CoreEngineRunner.isCoreRunning()) {
                     connected = false
                     status = "اتصال قطع شد: هسته متوقف شد"
                 }
@@ -194,6 +203,7 @@ object SingBoxController {
         connJob?.cancel()
         connJob = null
         connecting = false
+        awgActive = false
         if (!active) return
         CoreEngineRunner.stopCore()
         ctx.startService(stopIntent(ctx))
@@ -301,6 +311,7 @@ object SingBoxController {
             when (result) {
                 is AwgState.Up -> {
                     connected = true
+                    awgActive = true
                     status = "متصل به ${t.name} (AmneziaWG)"
                 }
                 is AwgState.Failed -> {

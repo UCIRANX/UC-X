@@ -317,7 +317,10 @@ class MultiCoreVpnService : VpnService() {
     }
 
     private fun stopAwgOnly() {
-        if (awgHandle > 0) runCatching { AwgNative.turnOff(awgHandle) }
+        if (awgHandle > 0) {
+            runCatching { AwgNative.turnOff(awgHandle) }
+            awgStatus.value = AwgState.Idle
+        }
         awgHandle = 0
     }
 
