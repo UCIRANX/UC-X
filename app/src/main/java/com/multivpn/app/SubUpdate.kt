@@ -39,13 +39,33 @@ object SubUpdate {
 
 class SubUpdateWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): androidx.work.ListenableWorker.Result = try {
-        val list = SubManager.fetchAndParseSub(applicationContext)
-        if (list.isEmpty()) androidx.work.ListenableWorker.Result.retry()
+        val count = SubRefresh.refreshAll(applicationContext)
+        if (count == 0) androidx.work.ListenableWorker.Result.retry()
         else {
             SubUpdate.markUpdated(applicationContext)
             androidx.work.ListenableWorker.Result.success()
         }
     } catch (e: Exception) {
         androidx.work.ListenableWorker.Result.retry()
+    }
+}
+
+/** بروزرسانی همهٔ منابع: ساب‌لینک‌های ثابت، و ساب‌لینک‌های شخصی تیک‌خورده. */
+object SubRefresh {
+    suspend fun refreshAll(ctx: Context): Int {
+        val builtin = SubManager.fetchAndParseSub(ctx)
+        val personal = SingBoxStore.loadPersonal(ctx)
+        val cache = SingBoxStore.loadPersonalCache(ctx)
+        personal.filter { it.enabled }.forEach { sub ->
+            val fetched = try {
+                SubManager.fetchUrls(listOf(sub.url))
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (fetched.isNotEmpty()) cache[sub.url] = fetched.map { it.rawConfig }
+        }
+        cache.keys.retainAll(personal.map { it.url }.toSet())
+        SingBoxStore.savePersonalCache(ctx, cache)
+        return builtin.size
     }
 }

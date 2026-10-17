@@ -1,10 +1,12 @@
 package com.multivpn.app
 
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.multivpn.app.awg.AwgState
 import com.multivpn.app.core.CoreConfigGenerator
 import com.multivpn.app.core.CoreEngineRunner
 import com.multivpn.app.security.TimeGuard
@@ -20,11 +22,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
-import com.multivpn.app.awg.AwgState
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
@@ -33,25 +34,39 @@ import java.util.Locale
 
 /**
  * وضعیت و عملیات حالت سینگ‌باکس.
- * داخل یک object است تا با عوض شدن تب قطع نشود.
- * پینگ هر سرور با هش خود کانفیگ ذخیره می‌شود، پس بعد از بروزرسانی ساب‌لینک و ریستارت پاک نمی‌شود.
+ * شناسهٔ هر سرور = هش کانفیگ؛ پس قلب، پینگ و انتخاب بین بروزرسانی‌ها پایدار می‌مانند.
+ * فهرست نهایی از سه منبع ساخته می‌شود: ساب‌لینک‌ها، کلیپ‌برد، و سرورهای قلب‌دار.
  */
 object SingBoxController {
     private const val PING_KEY = "singbox_ping_cache"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var connJob: Job? = null
+    private var pingJob: Job? = null
+    private var pingFlushJob: Job? = null
     private var loaded = false
     private var awgActive = false
     private var appCtx: Context? = null
     private var loadedStamp = 0L
+
+    private var subConfigs: List<VpnConfig> = emptyList()
+    private val clips = mutableListOf<ClipItem>()
+    private val favRaws = mutableListOf<String>()
+    private val pingMap = HashMap<String, Long>()
     private val pendingPings = LinkedHashMap<String, VpnConfig>()
 
     var configs: List<VpnConfig> by mutableStateOf<List<VpnConfig>>(emptyList())
         private set
 
-    /** فهرست نمایشی: سرورهای دارای پینگ بر اساس کمترین پینگ، بقیه به ترتیب اصلی. */
+    /** فهرست نمایشی به ترتیب: قلب‌دارها، کلیپ‌برد معلق، بقیه. */
     var displayed: List<VpnConfig> by mutableStateOf<List<VpnConfig>>(emptyList())
+        private set
+
+    var favKeys: Set<String> by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var clipKeys: Set<String> by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var personal: List<PersonalSub> by mutableStateOf<List<PersonalSub>>(emptyList())
         private set
 
     var selectedId: String? by mutableStateOf<String?>(null)
@@ -66,16 +81,13 @@ object SingBoxController {
         private set
     var status: String by mutableStateOf("")
         private set
-    /** زمان آخرین بروزرسانی ساب‌لینک (متن آماده نمایش). */
     var lastUpdate: String by mutableStateOf("")
+        private set
+    var paused: Boolean by mutableStateOf(false)
         private set
 
     val selected: VpnConfig?
         get() = configs.firstOrNull { it.id == selectedId }
-
-    /** توقف موقت: تونل بسته ولی نشست فعال است. */
-    var paused: Boolean by mutableStateOf(false)
-        private set
 
     fun resume(ctx: Context) {
         if (!paused) return
@@ -87,76 +99,97 @@ object SingBoxController {
         status = msg
     }
 
-    // ───────── ذخیرهٔ پینگ ─────────
+    // ───────── کلید و ذخیرهٔ پینگ ─────────
 
-    private fun keyOf(c: VpnConfig): String =
-        MessageDigest.getInstance("SHA-1").digest(c.rawConfig.toByteArray())
-            .joinToString("") { "%02x".format(it) }
+    private fun keyRaw(raw: String): String =
+        MessageDigest.getInstance("SHA-1").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
 
-    private fun readPingMap(ctx: Context): JSONObject =
-        runCatching { JSONObject(TimeGuard.getSecurePrefs(ctx).getString(PING_KEY, "{}") ?: "{}") }
-            .getOrElse { JSONObject() }
+    private fun keyOf(c: VpnConfig): String = keyRaw(c.rawConfig)
 
-    private fun withSavedPings(list: List<VpnConfig>): List<VpnConfig> {
-        val ctx = appCtx ?: return list
-        val map = readPingMap(ctx)
-        return list.map { c ->
-            val k = keyOf(c)
-            if (map.has(k)) c.copy(pingMs = map.getLong(k)) else c
+    private fun loadPings(ctx: Context) {
+        pingMap.clear()
+        runCatching {
+            val o = JSONObject(TimeGuard.getSecurePrefs(ctx).getString(PING_KEY, "{}") ?: "{}")
+            o.keys().forEach { k -> pingMap[k] = o.getLong(k) }
         }
     }
 
-    private fun persistPings(list: List<VpnConfig>) {
-        val ctx = appCtx ?: return
-        val map = readPingMap(ctx)
-        var changed = false
-        for (c in list) {
-            if (c.pingMs == -1L) continue
-            val k = keyOf(c)
-            if (!map.has(k) || map.getLong(k) != c.pingMs) {
-                map.put(k, c.pingMs)
-                changed = true
-            }
-        }
-        if (changed) TimeGuard.getSecurePrefs(ctx).edit().putString(PING_KEY, map.toString()).apply()
+    private fun savePings(ctx: Context) {
+        val o = JSONObject()
+        pingMap.forEach { (k, v) -> if (v != -1L) o.put(k, v) }
+        TimeGuard.getSecurePrefs(ctx).edit().putString(PING_KEY, o.toString()).apply()
     }
 
-    // ───────── فهرست ─────────
+    // ───────── ساختن فهرست ─────────
 
-    private fun applyList(list: List<VpnConfig>) {
-        configs = list
-        persistPings(list)
-        displayed = list.withIndex().sortedWith(
+    private fun formatTime(ms: Long): String =
+        if (ms <= 0L) "" else SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(ms))
+
+    /** فهرست کامل را از ساب‌لینک‌ها، کلیپ‌برد و قلب‌ها می‌سازد؛ شناسه‌ها هش‌اند و پینگ از روی ذخیره. */
+    private fun rebuild() {
+        val seen = LinkedHashSet<String>()
+        val merged = ArrayList<VpnConfig>()
+        fun add(c: VpnConfig) {
+            val k = keyOf(c)
+            if (seen.add(k)) merged += c.copy(id = k, pingMs = pingMap[k] ?: -1L)
+        }
+        subConfigs.forEach(::add)
+        clips.forEach { item -> SubManager.parseText(item.raw).firstOrNull()?.let(::add) }
+        favRaws.forEach { raw -> SubManager.parseText(raw).firstOrNull()?.let(::add) }
+
+        val favs = favRaws.map { keyRaw(it) }.toSet()
+        val pendingKeys = clips.filter { it.pending }.map { keyRaw(it.raw) }
+        val clipAll = clips.map { keyRaw(it.raw) }.toSet()
+
+        val favGroup = merged.filter { it.id in favs }
+        val pendingGroup = pendingKeys.mapNotNull { k -> merged.firstOrNull { it.id == k && it.id !in favs } }
+        val pendingSet = pendingKeys.toSet()
+        val restGroup = merged.filter { it.id !in favs && it.id !in pendingSet }
+
+        favKeys = favs
+        clipKeys = clipAll
+        configs = merged
+        displayed = sortPing(favGroup) + pendingGroup + sortPing(restGroup)
+        selectedId = merged.firstOrNull { it.id == selectedId }?.id ?: merged.firstOrNull()?.id
+    }
+
+    /** سرورهای دارای پینگ بر اساس کمترین پینگ؛ بقیه بعد از آن‌ها و به ترتیب قبلی. */
+    private fun sortPing(list: List<VpnConfig>): List<VpnConfig> =
+        list.withIndex().sortedWith(
             compareBy<IndexedValue<VpnConfig>>(
                 { if (it.value.pingMs > 0) 0 else 1 },
                 { if (it.value.pingMs > 0) it.value.pingMs else 0L },
                 { it.index },
             )
         ).map { it.value }
-    }
-
-    /** جایگزین کردن فهرست (بعد از بروزرسانی) و نگه داشتن سرور انتخابی با هش کانفیگ. */
-    private fun replaceConfigs(list: List<VpnConfig>) {
-        val prevKey = selected?.let { keyOf(it) }
-        applyList(withSavedPings(list))
-        selectedId = configs.firstOrNull { keyOf(it) == prevKey }?.id ?: configs.firstOrNull()?.id
-    }
 
     private fun setPing(id: String, ping: Long) {
-        applyList(configs.map { if (it.id == id) it.copy(pingMs = ping) else it })
+        pingMap[id] = ping
+        appCtx?.let { savePings(it) }
+        rebuild()
     }
 
-    private fun formatTime(ms: Long): String =
-        if (ms <= 0L) "" else SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(ms))
+    private fun flushPings() {
+        if (pendingPings.isEmpty()) return
+        pendingPings.forEach { (id, cfg) -> pingMap[id] = cfg.pingMs }
+        pendingPings.clear()
+        appCtx?.let { savePings(it) }
+        rebuild()
+    }
 
-    /** اگر ساب‌لینک در پس‌زمینه بروز شده، فهرست را از روی کش تازه می‌خواند. */
+    private fun clearPings(ctx: Context) {
+        pingMap.clear()
+        TimeGuard.getSecurePrefs(ctx).edit().remove(PING_KEY).apply()
+        rebuild()
+    }
+
     fun refreshFromStore(ctx: Context) {
         val ts = SubUpdate.lastUpdatedMs(ctx)
         if (ts == loadedStamp || busy) return
         loadedStamp = ts
         lastUpdate = formatTime(ts)
-        val list = SubManager.loadCachedConfigs(ctx)
-        if (list.isNotEmpty()) replaceConfigs(list)
+        reloadSources(ctx)
+        rebuild()
     }
 
     fun ensureLoaded(ctx: Context) {
@@ -165,21 +198,29 @@ object SingBoxController {
         appCtx = ctx.applicationContext
         loadedStamp = SubUpdate.lastUpdatedMs(ctx)
         lastUpdate = formatTime(loadedStamp)
-        replaceConfigs(SubManager.loadCachedConfigs(ctx))
+        loadPings(ctx)
+        favRaws.clear()
+        favRaws.addAll(SingBoxStore.loadFavs(ctx))
+        clips.clear()
+        clips.addAll(SingBoxStore.loadClips(ctx))
+        personal = SingBoxStore.loadPersonal(ctx)
+        reloadSources(ctx)
+        rebuild()
         status = if (configs.isEmpty()) "ابتدا سرورها را بروزرسانی کنید" else "آماده اتصال"
+
         scope.launch {
             MultiCoreVpnService.pausedFlow.collect { p ->
                 paused = p
                 if (connected) status = if (p) "متوقف موقت" else "متصل"
             }
         }
-        // اگر هسته بیرون از برنامه بسته شود، وضعیت باید درست شود
         scope.launch {
             while (isActive) {
                 delay(1000L)
                 if (!connected) continue
                 if (awgActive) {
-                    if (MultiCoreVpnService.awgStatus.value !is AwgState.Up) {
+                    val st = MultiCoreVpnService.awgStatus.value
+                    if (!paused && (st is AwgState.Idle || st is AwgState.Failed)) {
                         connected = false
                         awgActive = false
                         appCtx?.let { it.startService(stopIntent(it)) }
@@ -191,6 +232,113 @@ object SingBoxController {
                 }
             }
         }
+    }
+
+    // ───────── قلب، کلیپ‌برد، ساب‌لینک شخصی ─────────
+
+    /** قلب زدن/برداشتن. برداشتن قلب کانفیگ کلیپ‌برد را از حالت معلق خارج می‌کند. */
+    fun toggleFavorite(ctx: Context, cfg: VpnConfig) {
+        val k = cfg.id
+        if (k in favKeys) {
+            favRaws.removeAll { keyRaw(it) == k }
+            clips.filter { keyRaw(it.raw) == k }.forEach { it.pending = false }
+        } else {
+            favRaws.add(cfg.rawConfig)
+        }
+        SingBoxStore.saveFavs(ctx, favRaws)
+        SingBoxStore.saveClips(ctx, clips)
+        rebuild()
+    }
+
+    /** افزودن هر تعداد کانفیگ از کلیپ‌برد؛ بالای لیست و معلق تا تست پینگ یا برداشتن قلب. */
+    fun addFromClipboard(ctx: Context) {
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = cm.primaryClip
+        if (clip == null || clip.itemCount == 0) {
+            status = "کلیپ‌برد خالی است"
+            return
+        }
+        val text = buildString {
+            for (i in 0 until clip.itemCount) append(clip.getItemAt(i).coerceToText(ctx)).append('\n')
+        }
+        val parsed = SubManager.parseText(text)
+        if (parsed.isEmpty()) {
+            status = "کانفیگ معتبری در کلیپ‌برد پیدا نشد"
+            return
+        }
+        val existing = subConfigs.map { keyOf(it) }.toMutableSet()
+        existing += clips.map { keyRaw(it.raw) }
+        var added = 0
+        for (cfg in parsed.reversed()) {
+            val k = keyOf(cfg)
+            if (k in existing) continue
+            existing += k
+            clips.add(0, ClipItem(cfg.rawConfig, pending = true))
+            added++
+        }
+        SingBoxStore.saveClips(ctx, clips)
+        rebuild()
+        status = if (added == 0) "این کانفیگ‌ها قبلاً در لیست هستند" else "$added کانفیگ از کلیپ‌برد اضافه شد"
+    }
+
+    /** حذف کانفیگ کلیپ‌برد با سطل زباله. */
+    fun deleteClip(ctx: Context, key: String) {
+        clips.removeAll { keyRaw(it.raw) == key }
+        favRaws.removeAll { keyRaw(it) == key }
+        SingBoxStore.saveClips(ctx, clips)
+        SingBoxStore.saveFavs(ctx, favRaws)
+        rebuild()
+    }
+
+    fun addPersonal(ctx: Context, name: String, url: String) {
+        personal = personal + PersonalSub(name, url, enabled = true)
+        SingBoxStore.savePersonal(ctx, personal)
+    }
+
+    fun editPersonal(ctx: Context, index: Int, name: String, url: String) {
+        if (index !in personal.indices) return
+        val old = personal[index]
+        personal = personal.toMutableList().also { it[index] = old.copy(name = name, url = url) }
+        SingBoxStore.savePersonal(ctx, personal)
+        if (old.url != url) {
+            val cache = SingBoxStore.loadPersonalCache(ctx)
+            cache.remove(old.url)
+            SingBoxStore.savePersonalCache(ctx, cache)
+        }
+        reloadSources(ctx)
+        rebuild()
+    }
+
+    fun togglePersonal(ctx: Context, index: Int) {
+        if (index !in personal.indices) return
+        val old = personal[index]
+        personal = personal.toMutableList().also { it[index] = old.copy(enabled = !old.enabled) }
+        SingBoxStore.savePersonal(ctx, personal)
+        reloadSources(ctx)
+        rebuild()
+    }
+
+    /** حذف ساب‌لینک شخصی؛ سرورهایش با بروزرسانی بعدی حذف می‌شوند مگر قلب‌دار باشند. */
+    fun deletePersonal(ctx: Context, index: Int) {
+        if (index !in personal.indices) return
+        val removedUrl = personal[index].url
+        personal = personal.toMutableList().also { it.removeAt(index) }
+        SingBoxStore.savePersonal(ctx, personal)
+        val cache = SingBoxStore.loadPersonalCache(ctx)
+        cache.remove(removedUrl)
+        SingBoxStore.savePersonalCache(ctx, cache)
+        reloadSources(ctx)
+        rebuild()
+    }
+
+    /** ساب‌لینک‌های ثابت + سرورهای ساب‌لینک‌های شخصی تیک‌خورده (از کش). */
+    private fun reloadSources(ctx: Context) {
+        val builtin = SubManager.loadCachedConfigs(ctx)
+        val cache = SingBoxStore.loadPersonalCache(ctx)
+        val extra = personal.filter { it.enabled }
+            .flatMap { cache[it.url].orEmpty() }
+            .flatMap { SubManager.parseText(it) }
+        subConfigs = builtin + extra
     }
 
     // ───────── اتصال ─────────
@@ -211,7 +359,6 @@ object SingBoxController {
         status = message
     }
 
-    /** صبر می‌کند تا پورت‌های هسته قبلی واقعاً آزاد شوند؛ وگرنه اتصال جدید شکست می‌خورد. */
     private suspend fun awaitPortsFree(timeoutMs: Long = 4000L) {
         val end = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < end) {
@@ -242,13 +389,11 @@ object SingBoxController {
         connecting = true
         status = "در حال اتصال به ${t.name}…"
         connJob = scope.launch {
-            // نوتیفیکیشن همان لحظهٔ شروع اتصال نشان داده شود
             ctx.startService(Intent(ctx, MultiCoreVpnService::class.java).apply {
                 action = MultiCoreVpnService.ACTION_CONNECTING
                 putExtra("SERVER_NAME", t.name)
             })
             if (wasActive) {
-                // دقیقاً مثل قطع کامل و بعد اتصال: اول تونل قبلی بسته شود
                 delay(400L)
                 awaitPortsFree()
             }
@@ -283,7 +428,6 @@ object SingBoxController {
         }
     }
 
-    /** اتصال AmneziaWG: سرویس VPN خودش هسته را راه می‌اندازد و نتیجهٔ هندشیک را برمی‌گرداند. */
     private fun startAwg(ctx: Context, t: VpnConfig) {
         val wasActive = connected || connecting
         if (wasActive) stop(ctx, "در حال تغییر سرور…")
@@ -328,7 +472,6 @@ object SingBoxController {
         }
     }
 
-    /** انتخاب سرور: اگر وصل هستیم، همان کار «قطع، انتخاب، اتصال» انجام می‌شود؛ وگرنه فقط انتخاب. */
     fun select(ctx: Context, cfg: VpnConfig) {
         if (connected || connecting) {
             start(ctx, cfg)
@@ -349,29 +492,11 @@ object SingBoxController {
 
     // ───────── تست پینگ ─────────
 
-    private fun flushPings() {
-        if (pendingPings.isEmpty()) return
-        val byId = pendingPings.toMap()
-        pendingPings.clear()
-        applyList(configs.map { byId[it.id] ?: it })
-    }
-
-    /** تست پینگ واقعی؛ نتایج هر ۳۰۰ میلی‌ثانیه یک‌جا روی فهرست نشست می‌کنند تا لیست روان بماند. */
-    private var pingJob: Job? = null
-    private var pingFlushJob: Job? = null
-
-    /** پاک‌کردن پینگ‌های قبلی (هم در حافظه و هم در ذخیره). */
-    private fun clearPings(ctx: Context) {
-        TimeGuard.getSecurePrefs(ctx).edit().remove(PING_KEY).apply()
-        applyList(configs.map { it.copy(pingMs = -1L) })
-    }
-
-    /** توقف تست پینگ؛ نتیجه‌های تا این لحظه می‌مانند. */
     fun stopPing() {
         pingJob?.cancel()
     }
 
-    /** تست پینگ واقعی؛ پینگ‌های قبلی پاک می‌شوند و نتیجه‌ها همان لحظه روی فهرست می‌نشینند. */
+    /** تست پینگ؛ پینگ‌های قبلی پاک می‌شوند و نتیجه‌ها هر ۳۰۰ میلی‌ثانیه روی فهرست می‌نشینند. */
     fun pingAll(ctx: Context) {
         if (configs.isEmpty()) {
             status = "ابتدا سرورها را بروزرسانی کنید"
@@ -380,6 +505,9 @@ object SingBoxController {
         if (busy) return
         if (connected || connecting) stop(ctx, "برای تست پینگ، اتصال قطع شد")
         clearPings(ctx)
+        // کانفیگ‌های کلیپ‌برد بعد از تست پینگ دیگر معلق نیستند
+        clips.forEach { it.pending = false }
+        SingBoxStore.saveClips(ctx, clips)
 
         busy = true
         pinging = true
@@ -430,6 +558,7 @@ object SingBoxController {
 
     // ───────── بروزرسانی دستی ─────────
 
+    /** بروزرسانی همهٔ ساب‌لینک‌ها (ثابت + شخصی فعال)؛ پینگ‌ها پاک می‌شوند، قلب و کلیپ‌برد می‌مانند. */
     fun updateSubscriptions(ctx: Context) {
         if (busy) return
         clearPings(ctx)
@@ -437,14 +566,15 @@ object SingBoxController {
         status = "در حال دریافت سرورها از ساب‌لینک…"
         scope.launch {
             try {
-                val fetched = SubManager.fetchAndParseSub(ctx)
-                replaceConfigs(fetched)
-                if (fetched.isNotEmpty()) {
+                val count = SubRefresh.refreshAll(ctx)
+                reloadSources(ctx)
+                rebuild()
+                if (count > 0) {
                     SubUpdate.markUpdated(ctx)
                     loadedStamp = SubUpdate.lastUpdatedMs(ctx)
                     lastUpdate = formatTime(loadedStamp)
                 }
-                status = if (fetched.isEmpty()) "سروری در ساب‌لینک پیدا نشد" else "${fetched.size} سرور دریافت شد"
+                status = if (configs.isEmpty()) "سروری در ساب‌لینک پیدا نشد" else "${configs.size} سرور در لیست است"
             } catch (e: Exception) {
                 status = "دریافت ساب‌لینک ناموفق بود؛ اتصال اینترنت را بررسی کنید"
             } finally {

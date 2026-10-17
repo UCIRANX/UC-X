@@ -64,6 +64,7 @@ class MultiCoreVpnService : VpnService() {
     private var serverPing = -1L
     private var tunnelUp = false
     private var awgHandle = 0
+    private var awgRaw = ""
 
     private var prevRx = 0L
     private var prevTx = 0L
@@ -176,7 +177,8 @@ class MultiCoreVpnService : VpnService() {
     }
 
     private fun pauseTunnel() {
-        if (paused || awgHandle > 0) return
+        if (paused) return
+        if (awgHandle > 0) stopAwgOnly()
         setPaused(true)
         tunnelUp = false
         speedJob?.cancel()
@@ -186,6 +188,10 @@ class MultiCoreVpnService : VpnService() {
 
     private fun resumeTunnel() {
         if (!paused) return
+        if (awgRaw.isNotEmpty()) {
+            startAwg(awgRaw, serverName)
+            return
+        }
         serviceScope.launch {
             val ok = establishTunnel(serverName, socksPort)
             if (ok) {
@@ -199,14 +205,14 @@ class MultiCoreVpnService : VpnService() {
 
     private fun startSpeedUpdates() {
         speedJob?.cancel()
-        prevRx = TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
-        prevTx = TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+        val start = readCounters()
+        prevRx = start.first
+        prevTx = start.second
         prevTs = SystemClock.elapsedRealtime()
         speedJob = serviceScope.launch {
             while (isActive && tunnelUp) {
                 delay(1000L)
-                val rx = TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
-                val tx = TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+                val (rx, tx) = readCounters()
                 val now = SystemClock.elapsedRealtime()
                 val seconds = ((now - prevTs).coerceAtLeast(1L)) / 1000.0
                 downBps = ((rx - prevRx).coerceAtLeast(0L) / seconds).toLong()
@@ -218,6 +224,23 @@ class MultiCoreVpnService : VpnService() {
             }
         }
     }
+
+    /** مسیر Xray: شمارندهٔ خود رابط تونل (فقط ترافیک VPN). AmneziaWG: مجموع قبلی. */
+    private fun readCounters(): Pair<Long, Long> {
+        if (awgHandle == 0) {
+            tunCounters()?.let { return it }
+        }
+        return TrafficStats.getTotalRxBytes().coerceAtLeast(0L) to TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+    }
+
+    private fun tunCounters(): Pair<Long, Long>? = runCatching {
+        File("/proc/net/dev").readLines().firstNotNullOfOrNull { line ->
+            val t = line.trim()
+            if (!t.startsWith("tun")) return@firstNotNullOfOrNull null
+            val nums = t.substringAfter(":").trim().split(Regex("\\s+"))
+            if (nums.size < 9) null else nums[0].toLong() to nums[8].toLong()
+        }
+    }.getOrNull()
 
     private fun formatSpeed(bps: Long): String = when {
         bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
@@ -278,6 +301,7 @@ class MultiCoreVpnService : VpnService() {
     /** تونل AmneziaWG: رابط VpnService، سپس هسته، سپس بررسی هندشیک. */
     private fun startAwg(raw: String, name: String) {
         stopAwgOnly()
+        awgRaw = raw
         serverName = name
         serviceScope.launch {
             awgStatus.value = AwgState.Connecting
@@ -379,6 +403,7 @@ class MultiCoreVpnService : VpnService() {
 
     /** قطع کامل: هسته، تونل، نوتیفیکیشن و خود سرویس. */
     private fun shutdown() {
+        awgRaw = ""
         speedJob?.cancel()
         expiryJob?.cancel()
         tunnelUp = false

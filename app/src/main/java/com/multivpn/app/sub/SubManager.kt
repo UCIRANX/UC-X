@@ -43,10 +43,10 @@ object SubManager {
 
     fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> = loadCachedConfigs(context)
 
-    suspend fun fetchAndParseSub(context: Context): List<VpnConfig> {
+    suspend fun fetchAndParseSub(context: Context, extraUrls: List<String> = emptyList()): List<VpnConfig> {
         val out = StringBuilder()
         val visited = mutableSetOf<String>()
-        for (url in SUBSCRIPTION_URLS) collectFromUrl(url, 0, visited, out)
+        for (url in SUBSCRIPTION_URLS + extraUrls) collectFromUrl(url, 0, visited, out)
         val finalRaw = out.toString()
         if (finalRaw.isBlank()) {
             throw Exception("عدم دسترسی به سرور ساب‌لینک")
@@ -103,6 +103,17 @@ object SubManager {
             }
         }
     }
+
+    /** فقط همین لینک‌ها (بدون ساب‌لینک‌های ثابت)؛ برای ساب‌لینک‌های شخصی. */
+    suspend fun fetchUrls(urls: List<String>): List<VpnConfig> {
+        val out = StringBuilder()
+        val visited = mutableSetOf<String>()
+        for (url in urls) collectFromUrl(url, 0, visited, out)
+        return parseRawSubscription(out.toString())
+    }
+
+    /** متن خام (از کلیپ‌برد یا هر منبع) را به کانفیگ تبدیل می‌کند؛ base64 یا خطوط ساده. */
+    fun parseText(text: String): List<VpnConfig> = parseRawSubscription(decodeSubscriptionText(text))
 
     fun parseRawSubscription(rawText: String): List<VpnConfig> {
         val decodedContent = decodeSubscriptionText(rawText)

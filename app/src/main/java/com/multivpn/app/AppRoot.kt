@@ -47,6 +47,8 @@ import ir.uciran.uctor.ui.Bg
 import ir.uciran.uctor.ui.MainScreen
 import ir.uciran.uctor.ui.Surface1
 import ir.uciran.uctor.ui.Violet
+import ir.uciranx.ucg.core.StateBus
+import ir.uciranx.ucg.core.VpnState
 import ir.uciranx.ucg.ui.GuardRoot
 import ir.uciranx.ucg.ui.UcgTheme
 import kotlinx.coroutines.delay
@@ -57,12 +59,20 @@ enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("�
 
 private val TextSub = Color(0xFFB4B4C8)
 
+/** اگر VPN فعالی هست، همان بخش باز شود؛ وگرنه گارد. */
+private fun initialMode(): AppMode {
+    if (SingBoxController.connected || SingBoxController.connecting) return AppMode.VPN
+    if (TorController.state.value.phase != Phase.IDLE) return AppMode.TOR
+    if (StateBus.state.value != VpnState.Idle) return AppMode.GUARD
+    return AppMode.GUARD
+}
+
 @Composable
 fun AppRoot(onGuardConnect: () -> Unit = {}) {
     val context = LocalContext.current
     val torState by TorController.state.collectAsStateWithLifecycle()
     val torPhase = torState.phase
-    var mode by rememberSaveable { mutableStateOf(AppMode.GUARD) }
+    var mode by rememberSaveable { mutableStateOf(initialMode()) }
     var license by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
     var showManage by remember { mutableStateOf(false) }
     val valid = license is LicenseStatus.Valid

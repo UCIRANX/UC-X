@@ -3,9 +3,19 @@ package com.multivpn.app
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.runtime.remember
+import com.multivpn.app.security.DeviceIdProvider
+import ir.uciran.uctor.ui.Surface2
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -16,7 +26,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -63,6 +72,7 @@ fun LicenseManageDialog(status: LicenseStatus, onDismiss: () -> Unit, onChanged:
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("مهلت باقی‌مانده: $remainingText", fontSize = 14.sp)
                 if (showInput) {
+                    DeviceIdCopyRow()
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
@@ -70,12 +80,8 @@ fun LicenseManageDialog(status: LicenseStatus, onDismiss: () -> Unit, onChanged:
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text(
-                        "کد را از ربات @uciranxbot دریافت کنید.",
-                        color = Color(0xFFB4B4C8),
-                        fontSize = 13.sp,
-                    )
-                    TextButton(onClick = { openLicenseBot(context) }) { Text("ورود به ربات") }
+                    BotHintRow()
+                    BotOpenButton()
                     if (message.isNotBlank()) {
                         Text(message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                     }
@@ -134,5 +140,54 @@ fun LicenseManageDialog(status: LicenseStatus, onDismiss: () -> Unit, onChanged:
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("انصراف") }
             },
         )
+    }
+}
+
+/** متن راهنما: نام ربات همیشه از چپ به راست، صرف‌نظر از زبان گوشی. */
+@Composable
+fun BotHintRow() {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("کد را از ربات ", color = Color(0xFFB4B4C8), fontSize = 14.sp, style = ContentStyle)
+        Text("@uciranxbot", color = Color(0xFFB4B4C8), fontSize = 14.sp, fontWeight = FontWeight.Bold, style = LtrStyle)
+        Text(" دریافت کنید.", color = Color(0xFFB4B4C8), fontSize = 14.sp, style = ContentStyle)
+    }
+}
+
+/** دکمهٔ باز کردن ربات؛ بزرگ‌تر از قبل. */
+@Composable
+fun BotOpenButton() {
+    val context = LocalContext.current
+    TextButton(onClick = { openLicenseBot(context) }) {
+        Text("ورود به ربات", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF9B7BFF))
+    }
+}
+
+/** شناسهٔ دستگاه قابل انتخاب و کپی در پنجرهٔ ورود کد. */
+@Composable
+fun DeviceIdCopyRow() {
+    val context = LocalContext.current
+    val deviceId = remember { DeviceIdProvider.getFormattedDeviceId(context) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Surface2, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("شناسه دستگاه", fontSize = 12.sp, color = Color(0xFFB4B4C8), style = ContentStyle)
+            SelectionContainer {
+                Text(deviceId, fontWeight = FontWeight.Bold, fontSize = 18.sp, style = LtrStyle)
+            }
+        }
+        TextButton(onClick = {
+            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cb.setPrimaryClip(ClipData.newPlainText("DeviceID", deviceId))
+            Toast.makeText(context, "شناسه کپی شد", Toast.LENGTH_SHORT).show()
+        }) { Text("کپی") }
     }
 }

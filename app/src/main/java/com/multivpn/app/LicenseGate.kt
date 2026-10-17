@@ -96,8 +96,8 @@ fun LicenseGate(status: LicenseStatus, onActivated: (LicenseStatus) -> Unit) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text("کد را از ربات @uciranxbot دریافت کنید.", color = Color(0xFFB4B4C8), fontSize = 13.sp)
-                TextButton(onClick = { openLicenseBot(context) }) { Text("ورود به ربات") }
+                BotHintRow()
+                BotOpenButton()
                 if (message.isNotBlank()) {
                     Text(message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                 }
