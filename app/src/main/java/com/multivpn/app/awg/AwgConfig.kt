@@ -183,7 +183,6 @@ object AwgConfig {
     /** تنظیمات UAPI؛ آدرس endpoint باید IP باشد، پس قبلاً از بیرون resolve شده است. */
     fun toUapi(p: Parsed, endpointIp: String): String {
         val sb = StringBuilder()
-        sb.append("set=1\n")
         sb.append("private_key=").append(hex(p.iface.getValue("privatekey"))).append('\n')
         for (k in listOf("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5")) {
             val v = p.iface[k] ?: continue
