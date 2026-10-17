@@ -301,13 +301,19 @@ class MultiCoreVpnService : VpnService() {
                 awgStatus.value = AwgState.Up(name)
                 showNotification(connecting = false)
                 startSpeedUpdates()
-            } catch (e: Exception) {
+            } catch (t: Throwable) {
+                logAwgError(t)
                 stopAwgOnly()
                 stopTunnelOnly()
-                awgStatus.value = AwgState.Failed(e.message ?: "خطای ناشناخته")
+                awgStatus.value = AwgState.Failed(t.message ?: t.javaClass.simpleName)
                 shutdown()
             }
         }
+    }
+
+    /** خطاهای AmneziaWG در فایل ثبت می‌شوند تا علت کرش دیده شود. */
+    private fun logAwgError(t: Throwable) {
+        runCatching { File(filesDir, "awg_last_error.txt").writeText(t.stackTraceToString()) }
     }
 
     private fun stopAwgOnly() {
