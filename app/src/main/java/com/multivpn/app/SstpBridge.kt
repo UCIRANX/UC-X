@@ -37,3 +37,16 @@ fun stopOthersForSstp(ctx: Context) {
     stopGuardIfActive(ctx)
     if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
 }
+
+/** اتصال به یک سرور SSTP: نوشتن تنظیمات موتور، قطع VPNهای دیگر، و شروع سرویس. */
+fun connectSstpServer(ctx: Context, s: SstpServer) {
+    val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+    kittoku.osc.preference.accessor.setStringPrefValue(s.host, kittoku.osc.preference.OscPrefKey.HOME_HOSTNAME, prefs)
+    kittoku.osc.preference.accessor.setIntPrefValue(s.port, kittoku.osc.preference.OscPrefKey.SSL_PORT, prefs)
+    kittoku.osc.preference.accessor.setStringPrefValue(s.user, kittoku.osc.preference.OscPrefKey.HOME_USERNAME, prefs)
+    kittoku.osc.preference.accessor.setStringPrefValue(s.pass, kittoku.osc.preference.OscPrefKey.HOME_PASSWORD, prefs)
+    kittoku.osc.preference.accessor.setBooleanPrefValue(false, kittoku.osc.preference.OscPrefKey.SSL_DO_VERIFY, prefs)
+    prefs.edit().putString("SSTP_SERVER_LABEL", s.label).apply()
+    stopOthersForSstp(ctx)
+    sendSstp(ctx, ACTION_VPN_CONNECT)
+}

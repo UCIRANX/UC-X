@@ -10,7 +10,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.VpnService
+import android.net.TrafficStats
 import android.os.Build
+import android.os.SystemClock
 import android.service.quicksettings.TileService
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -24,6 +26,7 @@ import kittoku.osc.control.LogWriter
 import kittoku.osc.preference.OscPrefKey
 import kittoku.osc.preference.accessor.getBooleanPrefValue
 import kittoku.osc.preference.accessor.getIntPrefValue
+import kittoku.osc.preference.accessor.getStringPrefValue
 import kittoku.osc.preference.accessor.getURIPrefValue
 import kittoku.osc.preference.accessor.resetReconnectionLife
 import kittoku.osc.preference.accessor.setBooleanPrefValue
@@ -37,7 +40,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,6 +73,7 @@ internal class SstpVpnService : VpnService() {
     private var controller: Controller?  = null
 
     private var jobReconnect: Job? = null
+    private var statusJob: Job? = null
 
     private fun setRootState(state: Boolean) {
         setBooleanPrefValue(state, OscPrefKey.ROOT_STATE, prefs)
@@ -111,6 +118,7 @@ internal class SstpVpnService : VpnService() {
                 initializeClient()
 
                 setRootState(true)
+                startStatusLoop()
 
                 START_STICKY
             }
@@ -196,7 +204,7 @@ internal class SstpVpnService : VpnService() {
                 NOTIFICATION_DISCONNECT_CHANNEL,
                 NOTIFICATION_CERTIFICATE_CHANNEL,
             ).map {
-                NotificationChannel(it, it, NotificationManager.IMPORTANCE_DEFAULT)
+                NotificationChannel(it, it, NotificationManager.IMPORTANCE_LOW)
             }.also {
                 notificationManager.createNotificationChannels(it)
             }
@@ -218,6 +226,63 @@ internal class SstpVpnService : VpnService() {
         }
 
         startForeground(NOTIFICATION_DISCONNECT_ID, builder.build())
+    }
+
+    /** خواندن شمارندهٔ رابط tun (ترافیک واقعی VPN). */
+    private fun tunCounters(): Pair<Long, Long>? = runCatching {
+        File("/proc/net/dev").readLines().firstNotNullOfOrNull { line ->
+            val t = line.trim()
+            if (!t.startsWith("tun")) return@firstNotNullOfOrNull null
+            val nums = t.substringAfter(":").trim().split(Regex("\\s+"))
+            if (nums.size < 9) null else nums[0].toLong() to nums[8].toLong()
+        }
+    }.getOrNull()
+
+    private fun fmtSpeed(bps: Long): String = when {
+        bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
+        bps >= 1_000 -> "%.0f KB/s".format(bps / 1_000.0)
+        else -> "$bps B/s"
+    }
+
+    private fun buildStatusNotification(text: String): Notification {
+        val label = prefs.getString("SSTP_SERVER_LABEL", "") ?: ""
+        val pendingIntent = PendingIntent.getService(
+            this, 0,
+            Intent(this, SstpVpnService::class.java).setAction(ACTION_VPN_DISCONNECT),
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL).also {
+            it.priority = NotificationCompat.PRIORITY_LOW
+            it.setOngoing(true)
+            it.setOnlyAlertOnce(true)
+            it.setSilent(true)
+            it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
+            it.setContentTitle(if (label.isBlank()) "SSTP" else "SSTP · $label")
+            it.setContentText(text)
+            it.addAction(R.drawable.ic_baseline_close_24, "قطع", pendingIntent)
+        }.build()
+    }
+
+    /** هر ثانیه: وضعیت واقعی (HOME_STATUS) و سرعت لحظه‌ای را در اعلان می‌نویسد. */
+    private fun startStatusLoop() {
+        statusJob?.cancel()
+        statusJob = scope.launch {
+            var prev = tunCounters() ?: (TrafficStats.getTotalRxBytes().coerceAtLeast(0L) to TrafficStats.getTotalTxBytes().coerceAtLeast(0L))
+            var prevT = SystemClock.elapsedRealtime()
+            while (isActive) {
+                delay(1000L)
+                val cur = tunCounters() ?: (TrafficStats.getTotalRxBytes().coerceAtLeast(0L) to TrafficStats.getTotalTxBytes().coerceAtLeast(0L))
+                val now = SystemClock.elapsedRealtime()
+                val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
+                val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()
+                val up = ((cur.second - prev.second).coerceAtLeast(0L) / sec).toLong()
+                prev = cur
+                prevT = now
+                val connected = getStringPrefValue(OscPrefKey.HOME_STATUS, prefs).isNotBlank()
+                val text = if (connected) "متصل · ↓ ${fmtSpeed(down)}   ↑ ${fmtSpeed(up)}" else "در حال اتصال…"
+                tryNotify(buildStatusNotification(text), NOTIFICATION_DISCONNECT_ID)
+            }
+        }
     }
 
     internal fun notifyMessage(message: String, id: Int, channel: String) {
@@ -250,11 +315,13 @@ internal class SstpVpnService : VpnService() {
     }
 
     internal fun close() {
+        statusJob?.cancel()
         stopForeground(true)
         stopSelf()
     }
 
     override fun onDestroy() {
+        statusJob?.cancel()
         logWriter?.write("Terminate VPN connection")
         logWriter?.close()
         logWriter = null

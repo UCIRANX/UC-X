@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
         TorController.init(applicationContext)
         initGuard()
         SubUpdate.schedule(applicationContext)
+        SstpSub.schedule(applicationContext)
         ContextCompat.registerReceiver(
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )
