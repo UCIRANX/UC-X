@@ -51,6 +51,9 @@ import java.util.Locale
 
 internal const val ACTION_VPN_CONNECT = "kittoku.osc.connect"
 internal const val ACTION_VPN_DISCONNECT = "kittoku.osc.disconnect"
+internal const val ACTION_VPN_PAUSE = "kittoku.osc.pause"
+internal const val NOTIFICATION_PAUSED_ID = 5
+private const val PREF_PAUSED = "SSTP_PAUSED"
 
 internal const val NOTIFICATION_ERROR_CHANNEL = "ERROR"
 internal const val NOTIFICATION_RECONNECT_CHANNEL = "RECONNECT"
@@ -105,6 +108,8 @@ internal class SstpVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return when (intent?.action) {
             ACTION_VPN_CONNECT -> {
+                prefs.edit().putBoolean(PREF_PAUSED, false).apply()
+                notificationManager.cancel(NOTIFICATION_PAUSED_ID)
                 controller?.kill(false, null)
 
                 beForegrounded()
@@ -123,7 +128,14 @@ internal class SstpVpnService : VpnService() {
                 START_STICKY
             }
 
+            ACTION_VPN_PAUSE -> {
+                pauseNow()
+                START_NOT_STICKY
+            }
+
             else -> {
+                prefs.edit().putBoolean(PREF_PAUSED, false).apply()
+                notificationManager.cancel(NOTIFICATION_PAUSED_ID)
                 // ensure that reconnection has been completely canceled or done
                 runBlocking { jobReconnect?.cancelAndJoin() }
 
@@ -225,7 +237,7 @@ internal class SstpVpnService : VpnService() {
             it.addAction(R.drawable.ic_baseline_close_24, "DISCONNECT", pendingIntent)
         }
 
-        startForeground(NOTIFICATION_DISCONNECT_ID, builder.build())
+        startForeground(NOTIFICATION_DISCONNECT_ID, buildStatusNotification("در حال اتصال…"))
     }
 
     /** خواندن شمارندهٔ رابط tun (ترافیک واقعی VPN). */
@@ -244,13 +256,17 @@ internal class SstpVpnService : VpnService() {
         else -> "$bps B/s"
     }
 
+    private fun actionIntent(action: String, code: Int): PendingIntent = PendingIntent.getService(
+        this, code,
+        Intent(this, SstpVpnService::class.java).setAction(action),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    private fun serverLabel(): String = prefs.getString("SSTP_SERVER_LABEL", "") ?: ""
+
+    /** اعلان وضعیت: عنوان سرور، وضعیت، سرعت، و دکمه‌های توقف موقت و قطع کامل. */
     private fun buildStatusNotification(text: String): Notification {
-        val label = prefs.getString("SSTP_SERVER_LABEL", "") ?: ""
-        val pendingIntent = PendingIntent.getService(
-            this, 0,
-            Intent(this, SstpVpnService::class.java).setAction(ACTION_VPN_DISCONNECT),
-            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val label = serverLabel()
         return NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL).also {
             it.priority = NotificationCompat.PRIORITY_LOW
             it.setOngoing(true)
@@ -259,8 +275,33 @@ internal class SstpVpnService : VpnService() {
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
             it.setContentTitle(if (label.isBlank()) "SSTP" else "SSTP · $label")
             it.setContentText(text)
-            it.addAction(R.drawable.ic_baseline_close_24, "قطع", pendingIntent)
+            it.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            it.addAction(R.drawable.ic_baseline_close_24, "توقف موقت", actionIntent(ACTION_VPN_PAUSE, 3))
+            it.addAction(R.drawable.ic_baseline_close_24, "قطع کامل", actionIntent(ACTION_VPN_DISCONNECT, 4))
         }.build()
+    }
+
+    /** اعلان توقف موقت: با «اتصال مجدد» همان سرور دوباره وصل می‌شود. */
+    private fun buildPausedNotification(): Notification {
+        val label = serverLabel()
+        return NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL).also {
+            it.priority = NotificationCompat.PRIORITY_LOW
+            it.setSilent(true)
+            it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
+            it.setContentTitle(if (label.isBlank()) "SSTP" else "SSTP · $label")
+            it.setContentText("متوقف موقت")
+            it.addAction(R.drawable.ic_baseline_vpn_lock_24, "اتصال مجدد", actionIntent(ACTION_VPN_CONNECT, 1))
+            it.addAction(R.drawable.ic_baseline_close_24, "قطع کامل", actionIntent(ACTION_VPN_DISCONNECT, 2))
+        }.build()
+    }
+
+    /** توقف موقت: اتصال بسته می‌شود، ولی اعلان «اتصال مجدد» می‌ماند. */
+    private fun pauseNow() {
+        prefs.edit().putBoolean(PREF_PAUSED, true).apply()
+        tryNotify(buildPausedNotification(), NOTIFICATION_PAUSED_ID)
+        statusJob?.cancel()
+        controller?.disconnect()
+        controller = null
     }
 
     /** هر ثانیه: وضعیت واقعی (HOME_STATUS) و سرعت لحظه‌ای را در اعلان می‌نویسد. */
@@ -286,6 +327,7 @@ internal class SstpVpnService : VpnService() {
     }
 
     internal fun notifyMessage(message: String, id: Int, channel: String) {
+        if (channel != NOTIFICATION_DISCONNECT_CHANNEL) return
         NotificationCompat.Builder(this, channel).also {
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
             it.setContentText(message)

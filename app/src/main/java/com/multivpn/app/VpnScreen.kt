@@ -6,6 +6,7 @@ import android.net.VpnService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -230,11 +231,20 @@ private fun TabsRow(awgTabState: androidx.compose.runtime.MutableState<Boolean>,
                 Modifier
                     .weight(1f)
                     .background(if (on) Violet else Surface1, RoundedCornerShape(50))
+                    .border(1.dp, if (on) Violet else Violet.copy(alpha = 0.45f), RoundedCornerShape(50))
                     .clickable { awgTabState.value = isAwg }
-                    .padding(vertical = 6.dp),
+                    .padding(vertical = 8.dp, horizontal = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(label, color = if (on) Color.White else TextSub, fontSize = 12.sp, maxLines = 1, style = ContentStyle)
+                Text(
+                    label,
+                    color = if (on) Color.White else TextMain,
+                    fontSize = 12.sp,
+                    fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    style = ContentStyle,
+                )
             }
         }
     }

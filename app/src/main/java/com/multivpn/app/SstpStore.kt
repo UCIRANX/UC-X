@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
 /** لینک‌های ساب‌لینک SSTP. برای اضافه کردن ساب‌لینک جدید، آدرس آن را به این فهرست اضافه کنید. */
 val SSTP_SUB_URLS = listOf(
     "https://raw.githubusercontent.com/UCIRANX/Comp/refs/heads/main/UCsstp.txt",
+    "https://zaya.io/UCsstp",
+    "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt",
 )
 
 /** یک سرور SSTP. country کد دو حرفی کشور (مثل IR) یا خالی است. */
@@ -104,6 +106,19 @@ object SstpStore {
     private const val K_MANUAL = "SSTP_MANUAL"
     private const val K_SUB = "SSTP_SUB_CACHE"
     private const val K_UPDATED = "SSTP_SUB_UPDATED"
+    private const val K_FAV = "SSTP_FAV"
+
+    fun loadFav(ctx: Context): List<SstpServer> = fromJson(prefs(ctx).getString(K_FAV, "[]"))
+
+    /** قلب زدن/برداشتن؛ برمی‌گرداند: آیا الان قلب‌دار است. */
+    fun toggleFav(ctx: Context, s: SstpServer): Boolean {
+        val cur = loadFav(ctx).toMutableList()
+        val i = cur.indexOfFirst { it.key == s.key }
+        val nowFav = i < 0
+        if (i >= 0) cur.removeAt(i) else cur.add(0, s)
+        prefs(ctx).edit().putString(K_FAV, toJson(cur)).apply()
+        return nowFav
+    }
 
     private fun prefs(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx)
 
@@ -140,25 +155,39 @@ object SstpStore {
     }.getOrDefault(emptyList())
 }
 
-/** بروزرسانی ساب‌لینک‌های SSTP (دستی و هر ۱۲ ساعت). */
+/** بروزرسانی ساب‌لینک‌های SSTP (دستی و هر ۱۲ ساعت). لینک‌های تودرتو داخل فایل‌ها هم خوانده می‌شوند. */
 object SstpSub {
-    /** همهٔ ساب‌لینک‌ها را می‌خواند؛ تعداد سرورهای یکتا را برمی‌گرداند. */
-    suspend fun refresh(ctx: Context): Int {
-        val all = LinkedHashMap<String, SstpServer>()
-        var anyFetched = false
-        for (url in SSTP_SUB_URLS) {
-            val text = try {
-                DohClient.fetchUrlText(url)
-            } catch (_: Exception) {
-                null
-            } ?: continue
-            anyFetched = true
-            SstpParser.parse(text).forEach { all.putIfAbsent(it.key, it) }
+    private const val MAX_DEPTH = 2
+
+    private suspend fun collect(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder) {
+        if (depth > MAX_DEPTH || !visited.add(url)) return
+        val text = try {
+            DohClient.fetchUrlText(url)
+        } catch (_: Exception) {
+            return
         }
-        if (!anyFetched) throw Exception("دریافت ساب‌لینک SSTP ناموفق بود")
-        SstpStore.saveSub(ctx, all.values.toList())
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            if (line.startsWith("http://", true) || line.startsWith("https://", true)) {
+                collect(line, depth + 1, visited, out)
+            } else {
+                out.append(line).append('\n')
+            }
+        }
+    }
+
+    /** همهٔ ساب‌لینک‌ها؛ تعداد سرورهای یکتا را برمی‌گرداند. */
+    suspend fun refresh(ctx: Context): Int {
+        val out = StringBuilder()
+        val visited = mutableSetOf<String>()
+        for (url in SSTP_SUB_URLS) collect(url, 0, visited, out)
+        if (out.isBlank()) throw Exception("دریافت ساب‌لینک SSTP ناموفق بود")
+        val servers = LinkedHashMap<String, SstpServer>()
+        SstpParser.parse(out.toString()).forEach { servers.putIfAbsent(it.key, it) }
+        SstpStore.saveSub(ctx, servers.values.toList())
         SstpStore.markUpdated(ctx)
-        return all.size
+        return servers.size
     }
 
     fun schedule(ctx: Context) {

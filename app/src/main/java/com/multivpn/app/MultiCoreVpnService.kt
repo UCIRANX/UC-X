@@ -421,7 +421,7 @@ class MultiCoreVpnService : VpnService() {
         }
         val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("مهلت ۵ روزه به پایان رسید")
+            .setContentTitle("مهلت ۷ روزه به پایان رسید")
             .setContentText("اتصال فیلترشکن قطع شد. لطفاً کد جدید را از ربات تلگرام دریافت و وارد کنید.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
