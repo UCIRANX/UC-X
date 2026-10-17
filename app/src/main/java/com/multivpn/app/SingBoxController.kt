@@ -385,6 +385,7 @@ object SingBoxController {
             return
         }
         stopGuardIfActive(ctx)
+        stopSstpIfActive(ctx)
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
         val wasActive = connected || connecting
         if (wasActive) stop(ctx, "در حال تغییر سرور…")
@@ -433,6 +434,7 @@ object SingBoxController {
     }
 
     private fun startAwg(ctx: Context, t: VpnConfig) {
+        stopSstpIfActive(ctx)
         val wasActive = connected || connecting
         if (wasActive) stop(ctx, "در حال تغییر سرور…")
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()

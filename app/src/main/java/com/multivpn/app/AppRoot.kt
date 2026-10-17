@@ -1,5 +1,6 @@
 package com.multivpn.app
 
+import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,13 +56,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
-enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس") }
+enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس"), SSTP("SSTP") }
 
 private val TextSub = Color(0xFFB4B4C8)
 
 /** اگر VPN فعالی هست، همان بخش باز شود؛ وگرنه گارد. */
-private fun initialMode(): AppMode {
+private fun initialMode(ctx: Context): AppMode {
     if (SingBoxController.connected || SingBoxController.connecting) return AppMode.VPN
+    if (isSstpActive(ctx)) return AppMode.SSTP
     if (TorController.state.value.phase != Phase.IDLE) return AppMode.TOR
     if (StateBus.state.value != VpnState.Idle) return AppMode.GUARD
     return AppMode.GUARD
@@ -72,7 +74,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
     val context = LocalContext.current
     val torState by TorController.state.collectAsStateWithLifecycle()
     val torPhase = torState.phase
-    var mode by rememberSaveable { mutableStateOf(initialMode()) }
+    var mode by rememberSaveable { mutableStateOf(initialMode(context)) }
     var license by remember { mutableStateOf(LicenseManager.getCurrentLicenseStatus(context)) }
     var showManage by remember { mutableStateOf(false) }
     val valid = license is LicenseStatus.Valid
@@ -90,6 +92,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
             if (wasValid && !nowValid) {
                 SingBoxController.stop(context, "مهلت لایسنس تمام شد")
                 stopGuardIfActive(context)
+                stopSstpIfActive(context)
                 TorController.disconnect()
             }
             wasValid = nowValid
@@ -102,6 +105,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
         if (torPhase == Phase.CONNECTING) {
             SingBoxController.stop(context, "سینگ باکس برای اتصال تور قطع شد")
             stopGuardIfActive(context)
+            stopSstpIfActive(context)
         }
     }
 
@@ -136,6 +140,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
                         AppMode.VPN -> VpnScreen(licenseValid = valid)
                         AppMode.TOR -> MainScreen()
                         AppMode.GUARD -> UcgTheme { GuardRoot(onConnect = onGuardConnect) }
+                        AppMode.SSTP -> SstpScreen()
                     }
                 }
             }
