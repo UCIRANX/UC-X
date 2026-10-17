@@ -96,6 +96,9 @@ object SingBoxController {
         ctx.startService(Intent(ctx, MultiCoreVpnService::class.java).setAction(MultiCoreVpnService.ACTION_RESUME))
     }
 
+    /** پورت SOCKS هستهٔ Xray وقتی وصل است؛ برای AmneziaWG و حالت قطع null. */
+    fun localSocksPort(): Int? = if (connected && !awgActive) CoreConfigGenerator.LOCAL_SOCKS_PORT else null
+
     fun reportStatus(msg: String) {
         status = msg
     }

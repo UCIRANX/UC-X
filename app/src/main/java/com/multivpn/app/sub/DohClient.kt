@@ -29,11 +29,18 @@ object DohClient {
         .dns(dohDns)
         .build()
 
-    suspend fun fetchUrlText(url: String): String = withContext(Dispatchers.IO) {
+    suspend fun fetchUrlText(url: String, proxy: java.net.Proxy? = null): String = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", "MultiCoreVPN/2.2 (Android; Sing-box; Xray)")
             .build()
+
+        if (proxy != null) {
+            bootstrapClient.newBuilder().proxy(proxy).build().newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                return@withContext resp.body?.string() ?: throw Exception("پاسخ خالی از سرور")
+            }
+        }
 
         try {
             dohHttpClient.newCall(req).execute().use { resp ->

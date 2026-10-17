@@ -43,10 +43,10 @@ object SubManager {
 
     fun loadCachedOrSampleConfigs(context: Context): List<VpnConfig> = loadCachedConfigs(context)
 
-    suspend fun fetchAndParseSub(context: Context, extraUrls: List<String> = emptyList()): List<VpnConfig> {
+    suspend fun fetchAndParseSub(context: Context, extraUrls: List<String> = emptyList(), proxy: java.net.Proxy? = null): List<VpnConfig> {
         val out = StringBuilder()
         val visited = mutableSetOf<String>()
-        for (url in SUBSCRIPTION_URLS + extraUrls) collectFromUrl(url, 0, visited, out)
+        for (url in SUBSCRIPTION_URLS + extraUrls) collectFromUrl(url, 0, visited, out, proxy)
         val finalRaw = out.toString()
         if (finalRaw.isBlank()) {
             throw Exception("عدم دسترسی به سرور ساب‌لینک")
@@ -59,10 +59,10 @@ object SubManager {
     }
 
     /** یک آدرس را می‌خواند؛ خطوط http(s) داخل آن، ساب‌لینک‌های تودرتو هستند و دوباره بررسی می‌شوند. */
-    private suspend fun collectFromUrl(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder) {
+    private suspend fun collectFromUrl(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder, proxy: java.net.Proxy? = null) {
         if (depth > MAX_NESTED_DEPTH || !visited.add(url)) return
         val text = try {
-            DohClient.fetchUrlText(url)
+            DohClient.fetchUrlText(url, proxy)
         } catch (_: Exception) {
             return
         }
@@ -70,7 +70,7 @@ object SubManager {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
             if (line.startsWith("http://", ignoreCase = true) || line.startsWith("https://", ignoreCase = true)) {
-                collectFromUrl(line, depth + 1, visited, out)
+                collectFromUrl(line, depth + 1, visited, out, proxy)
             } else if (line.contains("://")) {
                 out.append(line).append('\n')
             }
@@ -105,10 +105,10 @@ object SubManager {
     }
 
     /** فقط همین لینک‌ها (بدون ساب‌لینک‌های ثابت)؛ برای ساب‌لینک‌های شخصی. */
-    suspend fun fetchUrls(urls: List<String>): List<VpnConfig> {
+    suspend fun fetchUrls(urls: List<String>, proxy: java.net.Proxy? = null): List<VpnConfig> {
         val out = StringBuilder()
         val visited = mutableSetOf<String>()
-        for (url in urls) collectFromUrl(url, 0, visited, out)
+        for (url in urls) collectFromUrl(url, 0, visited, out, proxy)
         return parseRawSubscription(out.toString())
     }
 
