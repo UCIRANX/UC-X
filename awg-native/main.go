@@ -11,6 +11,7 @@ extern jstring awgNewString(JNIEnv* env, const char* s);
 import "C"
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"syscall"
@@ -28,6 +29,12 @@ var (
 	devices       = map[int32]*device.Device{}
 )
 
+func setErr(msg string) {
+	mu.Lock()
+	lastErr = msg
+	mu.Unlock()
+}
+
 func jstrGo(env *C.JNIEnv, s C.jstring) string {
 	c := C.awgJstrChars(env, s)
 	if c == nil {
@@ -38,29 +45,30 @@ func jstrGo(env *C.JNIEnv, s C.jstring) string {
 }
 
 // turnOn یک تونل AmneziaWG را روی fd رابط VpnService راه می‌اندازد.
+// هر مرحله خطای خودش را با نام مرحله برمی‌گرداند تا علت مشخص باشد.
 func turnOn(iface string, fd int, settings string) (int32, error) {
 	dup, err := syscall.Dup(fd)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("dup: %w", err)
 	}
 	if err := syscall.SetNonblock(dup, true); err != nil {
 		_ = syscall.Close(dup)
-		return 0, err
+		return 0, fmt.Errorf("nonblock: %w", err)
 	}
 	tunDev, err := tun.CreateTUNFromFile(os.NewFile(uintptr(dup), "/dev/tun"), 0)
 	if err != nil {
 		_ = syscall.Close(dup)
-		return 0, err
+		return 0, fmt.Errorf("tun: %w", err)
 	}
 	logger := device.NewLogger(device.LogLevelError, "("+iface+") ")
 	dev := device.NewDevice(tunDev, conn.NewDefaultBind(), logger)
 	if err := dev.IpcSet(settings); err != nil {
 		dev.Close()
-		return 0, err
+		return 0, fmt.Errorf("uapi: %w", err)
 	}
 	if err := dev.Up(); err != nil {
 		dev.Close()
-		return 0, err
+		return 0, fmt.Errorf("up: %w", err)
 	}
 	mu.Lock()
 	h := nextID
@@ -71,12 +79,17 @@ func turnOn(iface string, fd int, settings string) (int32, error) {
 }
 
 //export Java_com_multivpn_app_awg_AwgNative_turnOn
-func Java_com_multivpn_app_awg_AwgNative_turnOn(env *C.JNIEnv, cls C.jclass, jIface C.jstring, fd C.jint, jSettings C.jstring) C.jint {
+func Java_com_multivpn_app_awg_AwgNative_turnOn(env *C.JNIEnv, cls C.jclass, jIface C.jstring, fd C.jint, jSettings C.jstring) (ret C.jint) {
+	ret = -1
+	defer func() {
+		if r := recover(); r != nil {
+			setErr(fmt.Sprintf("panic: %v", r))
+			ret = -1
+		}
+	}()
 	h, err := turnOn(jstrGo(env, jIface), int(fd), jstrGo(env, jSettings))
 	if err != nil {
-		mu.Lock()
-		lastErr = err.Error()
-		mu.Unlock()
+		setErr(err.Error())
 		return -1
 	}
 	return C.jint(h)
@@ -84,6 +97,11 @@ func Java_com_multivpn_app_awg_AwgNative_turnOn(env *C.JNIEnv, cls C.jclass, jIf
 
 //export Java_com_multivpn_app_awg_AwgNative_turnOff
 func Java_com_multivpn_app_awg_AwgNative_turnOff(env *C.JNIEnv, cls C.jclass, h C.jint) {
+	defer func() {
+		if r := recover(); r != nil {
+			setErr(fmt.Sprintf("panic on off: %v", r))
+		}
+	}()
 	mu.Lock()
 	dev := devices[int32(h)]
 	delete(devices, int32(h))
