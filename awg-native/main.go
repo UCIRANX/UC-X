@@ -12,7 +12,6 @@ import "C"
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -55,7 +54,8 @@ func turnOn(iface string, fd int, settings string) (int32, error) {
 		_ = syscall.Close(dup)
 		return 0, fmt.Errorf("nonblock: %w", err)
 	}
-	tunDev, err := tun.CreateTUNFromFile(os.NewFile(uintptr(dup), "/dev/tun"), 0)
+	// نسخهٔ بدون مانیتور netlink؛ اپ اندروید اجازهٔ netlink ندارد
+	tunDev, _, err := tun.CreateUnmonitoredTUNFromFD(dup)
 	if err != nil {
 		_ = syscall.Close(dup)
 		return 0, fmt.Errorf("tun: %w", err)
