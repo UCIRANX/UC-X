@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -566,7 +567,7 @@ object SingBoxController {
         status = "در حال دریافت سرورها از ساب‌لینک…"
         scope.launch {
             try {
-                val count = SubRefresh.refreshAll(ctx)
+                val count = withTimeout(90_000L) { SubRefresh.refreshAll(ctx) }
                 reloadSources(ctx)
                 rebuild()
                 if (count > 0) {

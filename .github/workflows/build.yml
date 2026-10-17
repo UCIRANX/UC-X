@@ -340,12 +340,20 @@ jobs:
 
       - name: Embed license public key
         run: |
-          f=app/src/main/java/com/multivpn/app/security/LicenseManager.kt
-          sed -i "s|PASTE_PUBLIC_KEY_HERE|${LICENSE_PUBLIC_KEY_B64}|" "$f"
-          if grep -q PASTE_PUBLIC_KEY_HERE "$f"; then
-            echo "::error::کلید عمومی لایسنس جایگذاری نشد"
-            exit 1
+          if [ -z "${LICENSE_PUBLIC_KEY_B64:-}" ]; then
+            echo "::error::LICENSE_PUBLIC_KEY_B64 خالی است؛ مرحلهٔ keys را بررسی کنید"; exit 1
           fi
+          python3 - "$LICENSE_PUBLIC_KEY_B64" <<'PY'
+          import sys
+          path = "app/src/main/java/com/multivpn/app/security/LicenseManager.kt"
+          key = sys.argv[1]
+          text = open(path, encoding="utf-8").read()
+          if "PASTE_PUBLIC_KEY_HERE" not in text:
+              print("placeholder already replaced"); sys.exit(0)
+          text = text.replace("PASTE_PUBLIC_KEY_HERE", key, 1)
+          open(path, "w", encoding="utf-8").write(text)
+          print("public key embedded:", len(key), "chars")
+          PY
 
       - name: Embed latest bridges into the APK
         run: |

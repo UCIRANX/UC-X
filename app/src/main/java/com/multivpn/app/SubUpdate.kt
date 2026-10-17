@@ -12,6 +12,7 @@ import androidx.work.WorkerParameters
 import com.multivpn.app.security.TimeGuard
 import com.multivpn.app.sub.SubManager
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val SUB_UPDATED_AT = "sub_updated_at_ms"
 
@@ -52,13 +53,16 @@ class SubUpdateWorker(appContext: Context, params: WorkerParameters) : Coroutine
 
 /** بروزرسانی همهٔ منابع: ساب‌لینک‌های ثابت، و ساب‌لینک‌های شخصی تیک‌خورده. */
 object SubRefresh {
+    private const val FETCH_TIMEOUT_MS = 25_000L
+
     suspend fun refreshAll(ctx: Context): Int {
-        val builtin = SubManager.fetchAndParseSub(ctx)
+        val builtin = withTimeoutOrNull(FETCH_TIMEOUT_MS) { SubManager.fetchAndParseSub(ctx) }
+            ?: throw Exception("مهلت دریافت ساب‌لینک‌ها تمام شد")
         val personal = SingBoxStore.loadPersonal(ctx)
         val cache = SingBoxStore.loadPersonalCache(ctx)
         personal.filter { it.enabled }.forEach { sub ->
             val fetched = try {
-                SubManager.fetchUrls(listOf(sub.url))
+                withTimeoutOrNull(FETCH_TIMEOUT_MS) { SubManager.fetchUrls(listOf(sub.url)) } ?: emptyList()
             } catch (_: Exception) {
                 emptyList()
             }
