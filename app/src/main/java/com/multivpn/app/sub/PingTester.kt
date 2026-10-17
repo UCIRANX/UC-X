@@ -98,7 +98,7 @@ object PingTester {
         val emit: (VpnConfig) -> Unit = { c -> if (emitted.add(c.id)) onResult(c) }
 
         val hy2 = configs.filter { it.protocol.equals("hy2", true) }
-        val xray = configs.filter { !it.protocol.equals("hy2", true) }
+        val xray = configs.filter { !it.protocol.equals("hy2", true) && it.coreType != "AmneziaWG" }
         onProgress("تست ${configs.size} سرور…")
 
         coroutineScope {
@@ -110,10 +110,10 @@ object PingTester {
             }
         }
 
-        configs.forEach { cfg -> emit(cfg.copy(pingMs = realResults[cfg.id] ?: -2L)) }
+        configs.forEach { cfg -> emit(cfg.copy(pingMs = realResults[cfg.id] ?: (if (cfg.coreType == "AmneziaWG") -1L else -2L))) }
 
         configs.map { cfg ->
-            cfg.copy(pingMs = realResults[cfg.id] ?: -2L)
+            cfg.copy(pingMs = realResults[cfg.id] ?: (if (cfg.coreType == "AmneziaWG") -1L else -2L))
         }.sortedWith(compareBy {
             when {
                 it.pingMs > 0 -> it.pingMs

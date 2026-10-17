@@ -48,7 +48,7 @@ function helpText(channel) {
     "👋 سلام!\n\n" +
     `۱. ابتدا در کانال @${channel} عضو شوید.\n` +
     "۲. شناسه ۸ حرفی دستگاه را از بخش «شناسه گوشی» برنامه کپی کرده و بفرستید.\n" +
-    `۳. ${REQUIRED_POSTS} پست جدید از کانال را برای این ربات فوروارد کنید.\n\n` +
+    `۳. ${REQUIRED_POSTS} پست از کانال را ری‌اکشن بزنید و برای این ربات فوروارد کنید.\n\n` +
     "🔁 به‌صورت نامحدود می‌توانید هر ۵ روز یک بار کد جدید بگیرید.\n" +
     "⏰ ۲۴ ساعت قبل از پایان مهلت کد فعلی، می‌توانید کد جدید بگیرید.\n\n" +
     "کد دریافتی را در برنامه، بخش «کد لایسنس» وارد کنید."
@@ -194,22 +194,22 @@ async function handleUnbind(msg, env, text) {
   return send(env, chatId, `اتصال ${formatDeviceId(deviceId)} آزاد شد.`);
 }
 
-// دستور ادمین: کد ۱۰ ساله برای یک شناسه دستگاه؛ فقط برای ادمین ارسال می‌شود
+// دستور ادمین: /long تعداد_روز شناسه — کد مدت‌دار فقط برای همان شناسه؛ رکورد کد عادی تغییر نمی‌کند
 async function handleLong(msg, env, text) {
   const chatId = msg.chat.id;
   if (!env.ADMIN_ID || String(msg.from.id) !== String(env.ADMIN_ID)) {
     return send(env, chatId, "دسترسی ندارید.");
   }
-  const deviceId = normalizeDeviceId(text.split(/\s+/)[1] || "");
-  if (!deviceId) return send(env, chatId, "فرمت: /long XXXX-XXXX");
-
-  const { token, expiry } = await issueToken(env, deviceId, LONG_LICENSE_SECONDS);
-  const dev = (await getJSON(env.STATE, `dev:${deviceId}`)) || { tg: null, lastPost: 0 };
-  dev.token = token;
-  dev.expiry = expiry;
-  await env.STATE.put(`dev:${deviceId}`, JSON.stringify(dev));
+  const parts = text.split(/\s+/);
+  const days = parseInt(parts[1] || "", 10);
+  const deviceId = normalizeDeviceId(parts[2] || "");
+  if (!Number.isFinite(days) || days < 1 || days > 3650 || !deviceId) {
+    return send(env, chatId, "فرمت: /long تعداد_روز شناسه\nمثال: /long 20 DMM-6QCR");
+  }
+  const { token, expiry } = await issueToken(env, deviceId, days * 86400);
+  await env.STATE.put(`admin:${deviceId}`, JSON.stringify({ token, expiry, days }));
   return send(env, chatId,
-    `کد ۱۰ ساله برای ${formatDeviceId(deviceId)}:\n<code>${token}</code>\nاعتبار تا: <b>${fmtDate(expiry)}</b>`);
+    `کد ${days} روزه برای ${formatDeviceId(deviceId)}:\n<code>${token}</code>\nاعتبار تا: <b>${fmtDate(expiry)}</b>`);
 }
 
 // ---------- کمک‌کننده‌ها ----------

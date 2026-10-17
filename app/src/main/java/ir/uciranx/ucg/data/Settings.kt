@@ -115,7 +115,7 @@ data class Settings(
     val protocol: Protocol = Protocol.WIREGUARD,
     val helper: Helper = Helper.NONE,
     val scan: ScanMode = ScanMode.TURBO,
-    val ip: IpMode = IpMode.V4,
+    val ip: IpMode = IpMode.DUAL,
     val masqueHttp2: Boolean = true,
     val fragment: Boolean = false,
     val masqueNoize: String = "firewall",

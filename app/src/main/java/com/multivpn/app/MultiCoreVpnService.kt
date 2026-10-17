@@ -13,6 +13,9 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import com.multivpn.app.awg.AwgConfig
+import com.multivpn.app.awg.AwgNative
+import com.multivpn.app.awg.AwgState
 import com.multivpn.app.core.CoreConfigGenerator
 import com.multivpn.app.core.CoreEngineRunner
 import com.multivpn.app.core.Tun2SocksBridge
@@ -26,6 +29,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import java.net.InetAddress
 import java.io.File
 
 /** سرویس VPN سینگ‌باکس با نوتیفیکیشن مشابه نوتیفیکیشن تور (سرعت لحظه‌ای، توقف موقت، قطع کامل). */
@@ -37,6 +42,9 @@ class MultiCoreVpnService : VpnService() {
         const val ACTION_CONNECTING = "com.multivpn.app.action.CONNECTING"
         private const val NOTIF_ID = 1001
         private const val CHANNEL_ID = "singbox_channel"
+
+        /** وضعیت اتصال AmneziaWG؛ کنترلر Sing-Box آن را می‌خواند. */
+        val awgStatus = MutableStateFlow<AwgState>(AwgState.Idle)
 
         private val pausedState = kotlinx.coroutines.flow.MutableStateFlow(false)
         /** وضعیت توقف موقت؛ UI با این جریان به‌روز می‌شود. */
@@ -55,6 +63,7 @@ class MultiCoreVpnService : VpnService() {
     private var socksPort = CoreConfigGenerator.LOCAL_SOCKS_PORT
     private var serverPing = -1L
     private var tunnelUp = false
+    private var awgHandle = 0
 
     private var prevRx = 0L
     private var prevTx = 0L
@@ -85,6 +94,10 @@ class MultiCoreVpnService : VpnService() {
             }
         }
 
+        if (intent?.getStringExtra("CORE_NAME") == "AmneziaWG") {
+            startAwg(intent.getStringExtra("AWG_RAW").orEmpty(), intent.getStringExtra("SERVER_NAME") ?: "AmneziaWG")
+            return START_STICKY
+        }
         coreName = intent?.getStringExtra("CORE_NAME") ?: coreName
         serverName = intent?.getStringExtra("SERVER_NAME") ?: "Server"
         socksPort = intent?.getIntExtra("SOCKS_PORT", CoreConfigGenerator.LOCAL_SOCKS_PORT) ?: CoreConfigGenerator.LOCAL_SOCKS_PORT
@@ -163,7 +176,7 @@ class MultiCoreVpnService : VpnService() {
     }
 
     private fun pauseTunnel() {
-        if (paused) return
+        if (paused || awgHandle > 0) return
         setPaused(true)
         tunnelUp = false
         speedJob?.cancel()
@@ -262,6 +275,73 @@ class MultiCoreVpnService : VpnService() {
         startForeground(NOTIF_ID, notification)
     }
 
+    /** تونل AmneziaWG: رابط VpnService، سپس هسته، سپس بررسی هندشیک. */
+    private fun startAwg(raw: String, name: String) {
+        stopAwgOnly()
+        serverName = name
+        serviceScope.launch {
+            awgStatus.value = AwgState.Connecting
+            try {
+                val conf = AwgConfig.decodeConf(raw)
+                    ?: throw Exception("این فرمت AmneziaWG پشتیبانی نمی‌شود؛ از فرمت awg:// استفاده کنید")
+                val parsed = AwgConfig.parse(conf) ?: throw Exception("کانفیگ AmneziaWG ناقص است")
+                val endpointIp = InetAddress.getByName(parsed.endpointHost).hostAddress
+                    ?: throw Exception("آدرس سرور پیدا نشد")
+                val pfd = tunnelBuilder(name, parsed).establish()
+                    ?: throw Exception("مجوز VPN داده نشد")
+                vpnInterface = pfd
+                val handle = AwgNative.turnOn("awg0", pfd.fd, AwgConfig.toUapi(parsed, endpointIp))
+                if (handle <= 0) throw Exception("هسته AmneziaWG اجرا نشد")
+                awgHandle = handle
+                tunnelUp = true
+                setPaused(false)
+                if (!waitHandshake(handle, 12_000L)) {
+                    throw Exception("سرور جواب نداد (هندشیک انجام نشد)")
+                }
+                awgStatus.value = AwgState.Up(name)
+                showNotification(connecting = false)
+                startSpeedUpdates()
+            } catch (e: Exception) {
+                stopAwgOnly()
+                stopTunnelOnly()
+                awgStatus.value = AwgState.Failed(e.message ?: "خطای ناشناخته")
+                shutdown()
+            }
+        }
+    }
+
+    private fun stopAwgOnly() {
+        if (awgHandle > 0) runCatching { AwgNative.turnOff(awgHandle) }
+        awgHandle = 0
+    }
+
+    private suspend fun waitHandshake(handle: Int, timeoutMs: Long): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            val info = runCatching { AwgNative.ipcGet(handle) }.getOrDefault("")
+            val ts = info.lines()
+                .firstOrNull { it.startsWith("last_handshake_time_sec=") }
+                ?.substringAfter("=")?.toLongOrNull() ?: 0L
+            if (ts > 0L) return true
+            delay(500L)
+        }
+        return false
+    }
+
+    private fun tunnelBuilder(session: String, p: AwgConfig.Parsed): Builder {
+        val b = Builder()
+            .setSession("AmneziaWG - $session")
+            .setMtu(p.mtu)
+        for ((ip, prefix) in p.addresses) b.addAddress(ip, prefix)
+        b.addRoute("0.0.0.0", 0)
+        b.addRoute("::", 0)
+        for (dns in p.dns) b.addDnsServer(dns)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
+        // برنامه خودش از تونل بیرون بماند تا سوکت UDP هسته داخل TUN نیفتد
+        runCatching { b.addDisallowedApplication(packageName) }
+        return b
+    }
+
     private fun startExpirationWatchdog() {
         expiryJob?.cancel()
         expiryJob = serviceScope.launch {
@@ -283,6 +363,7 @@ class MultiCoreVpnService : VpnService() {
     }
 
     private fun stopTunnel() {
+        stopAwgOnly()
         runCatching { CoreEngineRunner.stopCore() }
         stopTunnelOnly()
     }

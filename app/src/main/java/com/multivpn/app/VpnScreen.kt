@@ -24,6 +24,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,7 +81,10 @@ fun VpnScreen(licenseValid: Boolean) {
         else -> "اتصال"
     }
     val canTap = licenseValid && (!ctl.busy || ctl.connecting || ctl.connected)
-    val sorted = ctl.displayed
+    val allList = ctl.displayed.filter { it.coreType != "AmneziaWG" }
+    val awgList = ctl.displayed.filter { it.coreType == "AmneziaWG" }
+    val awgTabState = rememberSaveable { mutableStateOf(false) }
+    val sorted = if (awgTabState.value) awgList else allList
     val selected = ctl.selected
 
     Column(
@@ -142,6 +147,21 @@ fun VpnScreen(licenseValid: Boolean) {
             }
         }
 
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(false to "همه سرورها (${allList.size})", true to "AmneziaWG (${awgList.size})").forEach { (isAwg, label) ->
+                val on = awgTabState.value == isAwg
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .background(if (on) Violet else Surface1, RoundedCornerShape(50))
+                        .clickable { awgTabState.value = isAwg }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, color = if (on) Color.White else TextSub, fontSize = 13.sp, maxLines = 1, style = ContentStyle)
+                }
+            }
+        }
         // فهرست سرورها: سرورهای پاسخ‌دهنده بالا و به ترتیب رسیدن نتیجه نمایش داده می‌شوند
         Column(
             Modifier
@@ -198,10 +218,10 @@ fun VpnScreen(licenseValid: Boolean) {
                 modifier = Modifier.weight(1f),
             ) { Text("بروزرسانی سرورها", maxLines = 1) }
             OutlinedButton(
-                onClick = { ctl.pingAll(context) },
-                enabled = !ctl.busy,
+                onClick = { if (ctl.pinging) ctl.stopPing() else ctl.pingAll(context) },
+                enabled = ctl.pinging || !ctl.busy,
                 modifier = Modifier.weight(1f),
-            ) { Text(if (ctl.busy) "در حال کار…" else "تست پینگ", maxLines = 1) }
+            ) { Text(if (ctl.pinging) "متوقف کردن" else "تست پینگ", maxLines = 1) }
         }
         Text(
             if (ctl.lastUpdate.isBlank()) "هنوز سرورها بروزرسانی نشده؛ هر ۲۴ ساعت خودکار بروز می‌شوند"

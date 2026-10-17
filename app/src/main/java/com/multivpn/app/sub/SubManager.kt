@@ -1,7 +1,8 @@
 package com.multivpn.app.sub
 
-import android.content.Context
 import android.util.Base64
+
+import android.content.Context
 import com.multivpn.app.security.TimeGuard
 import org.json.JSONObject
 import java.net.URLDecoder
@@ -26,7 +27,9 @@ object SubManager {
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcSubot.txt",
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/Uciran.txt",
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/Uciranir.txt",
-        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt"
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt",
+        "https://uciran.app/23NscP",
+        "https://zaya.io/UCX"
     )
 
     private const val MAX_NESTED_DEPTH = 2
@@ -115,7 +118,7 @@ object SubManager {
                 line.startsWith("vmess://", ignoreCase = true) -> parseVmess(line)
                 line.startsWith("trojan://", ignoreCase = true) -> parseGenericUri(line, "trojan", "Sing-box (Xray)")
                 line.startsWith("tuic://", ignoreCase = true) -> parseGenericUri(line, "tuic", "Sing-box (Xray)")
-                line.startsWith("awg://", ignoreCase = true) ||
+                line.startsWith("awg://", ignoreCase = true) -> parseAwgUri(line)
                 line.startsWith("wg://", ignoreCase = true) ||
                 line.startsWith("wireguard://", ignoreCase = true) -> parseGenericUri(line, "awg", "AmneziaWG")
                 line.startsWith("ovpn://", ignoreCase = true) -> parseGenericUri(line, "ovpn", "OpenVPN")
@@ -128,6 +131,45 @@ object SubManager {
         }
         val seen = HashSet<String>()
         return list.filter { seen.add(dedupKey(it)) }
+    }
+
+    /** awg://<base64 از متن کامل .conf>#نام — سرور از خط Endpoint خوانده می‌شود. */
+    private fun parseAwgUri(line: String): VpnConfig? {
+        return try {
+            val payload = line.substringAfter("://").substringBefore("#").trim()
+            val decoded = try {
+                String(Base64.decode(payload, Base64.DEFAULT), Charsets.UTF_8)
+            } catch (_: Exception) {
+                String(Base64.decode(payload, Base64.URL_SAFE), Charsets.UTF_8)
+            }
+            val endpointLine = decoded.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.startsWith("Endpoint", ignoreCase = true) && it.contains("=") }
+                ?: return null
+            val endpoint = endpointLine.substringAfter("=").trim()
+            val host: String
+            val port: Int
+            if (endpoint.startsWith("[")) {
+                host = endpoint.substringBefore("]") + "]"
+                port = endpoint.substringAfter("]:", "").toIntOrNull() ?: return null
+            } else {
+                host = endpoint.substringBeforeLast(":")
+                port = endpoint.substringAfterLast(":").toIntOrNull() ?: return null
+            }
+            val remark = line.substringAfter("#", "").let {
+                if (it.isNotBlank()) URLDecoder.decode(it, "UTF-8") else ""
+            }
+            VpnConfig(
+                name = remark.ifBlank { "AmneziaWG $host" },
+                coreType = "AmneziaWG",
+                protocol = "awg",
+                host = host,
+                port = port,
+                rawConfig = line,
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun parseGenericUri(uriStr: String, protocol: String, coreType: String): VpnConfig? {

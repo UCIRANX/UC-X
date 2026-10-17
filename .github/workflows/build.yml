@@ -219,9 +219,73 @@ jobs:
           name: native-${{ matrix.abi }}
           path: ${{ runner.temp }}/native-${{ matrix.abi }}/*
 
+  awg:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Resolve Go and clang target
+        run: |
+          case "${{ matrix.abi }}" in
+            arm64-v8a)
+              echo "GO_ARCH=arm64" >> "$GITHUB_ENV"
+              echo "GO_ARM=" >> "$GITHUB_ENV"
+              echo "CC_TRIPLE=aarch64-linux-android24-clang" >> "$GITHUB_ENV" ;;
+            armeabi-v7a)
+              echo "GO_ARCH=arm" >> "$GITHUB_ENV"
+              echo "GO_ARM=7" >> "$GITHUB_ENV"
+              echo "CC_TRIPLE=armv7a-linux-androideabi24-clang" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Build libawg (AmneziaWG)
+        working-directory: awg-native
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          [ -f go.mod ] || go mod init multivpn/awgnative
+          go get github.com/amnezia-vpn/amneziawg-go/v3@latest
+          go mod tidy
+          CGO_ENABLED=1 GOOS=android GOARCH="$GO_ARCH" GOARM="$GO_ARM" CC="$bin/$CC_TRIPLE" \
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o libawg.so .
+          ls -la libawg.so
+
+      - name: Stage libawg
+        working-directory: awg-native
+        run: |
+          out="$RUNNER_TEMP/awg-${{ matrix.abi }}"
+          mkdir -p "$out"
+          cp libawg.so "$out/libawg.so"
+
+      - name: Upload libawg
+        uses: actions/upload-artifact@v4
+        with:
+          name: awg-${{ matrix.abi }}
+          path: ${{ runner.temp }}/awg-${{ matrix.abi }}/*
+
   build:
-    needs: [apply-zip, keys, native]
-    if: ${{ always() && needs.keys.result == 'success' && needs.native.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    needs: [apply-zip, keys, native, awg]
+    if: ${{ always() && needs.keys.result == 'success' && needs.native.result == 'success' && needs.awg.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -248,6 +312,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash tools/keys.sh
 
+      - name: Download libawg (AmneziaWG)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: awg-*
+          path: native
+
       - name: Download native binaries (Aether, Psiphon, lyrebird)
         uses: actions/download-artifact@v4
         with:
@@ -258,6 +328,11 @@ jobs:
         run: |
           for d in native/native-*; do
             abi="${d#native/native-}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "$d"/* "app/src/main/jniLibs/$abi/"
+          done
+          for d in native/awg-*; do
+            abi="${d#native/awg-}"
             mkdir -p "app/src/main/jniLibs/$abi"
             cp "$d"/* "app/src/main/jniLibs/$abi/"
           done
@@ -314,7 +389,7 @@ jobs:
           echo "APK: $apk"
           missing=0
           for abi in arm64-v8a armeabi-v7a; do
-            for lib in libhev-guard.so libaether.so libpsiphon-tunnel-core.so liblyrebird.so; do
+            for lib in libhev-guard.so libaether.so libpsiphon-tunnel-core.so liblyrebird.so libawg.so; do
               if unzip -l "$apk" | grep -q "lib/$abi/$lib"; then
                 echo "ok   lib/$abi/$lib"
               else

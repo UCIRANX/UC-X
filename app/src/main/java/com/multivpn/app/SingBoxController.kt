@@ -19,6 +19,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import com.multivpn.app.awg.AwgState
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +60,8 @@ object SingBoxController {
     var connecting: Boolean by mutableStateOf(false)
         private set
     var busy: Boolean by mutableStateOf(false)
+        private set
+    var pinging: Boolean by mutableStateOf(false)
         private set
     var status: String by mutableStateOf("")
         private set
@@ -214,6 +219,10 @@ object SingBoxController {
             status = "سروری برای اتصال وجود ندارد"
             return
         }
+        if (t.coreType == "AmneziaWG") {
+            startAwg(ctx, t)
+            return
+        }
         stopGuardIfActive(ctx)
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
         val wasActive = connected || connecting
@@ -264,6 +273,50 @@ object SingBoxController {
         }
     }
 
+    /** اتصال AmneziaWG: سرویس VPN خودش هسته را راه می‌اندازد و نتیجهٔ هندشیک را برمی‌گرداند. */
+    private fun startAwg(ctx: Context, t: VpnConfig) {
+        val wasActive = connected || connecting
+        if (wasActive) stop(ctx, "در حال تغییر سرور…")
+        if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
+        selectedId = t.id
+        connecting = true
+        status = "در حال اتصال به ${t.name}…"
+        connJob = scope.launch {
+            ctx.startService(Intent(ctx, MultiCoreVpnService::class.java).apply {
+                action = MultiCoreVpnService.ACTION_CONNECTING
+                putExtra("SERVER_NAME", t.name)
+            })
+            if (wasActive) delay(400L)
+            MultiCoreVpnService.awgStatus.value = AwgState.Connecting
+            ctx.startService(Intent(ctx, MultiCoreVpnService::class.java).apply {
+                putExtra("CORE_NAME", "AmneziaWG")
+                putExtra("SERVER_NAME", t.name)
+                putExtra("AWG_RAW", t.rawConfig)
+            })
+            val result = withTimeoutOrNull(30_000L) {
+                MultiCoreVpnService.awgStatus.first { it is AwgState.Up || it is AwgState.Failed }
+            }
+            if (!isActive) return@launch
+            connecting = false
+            when (result) {
+                is AwgState.Up -> {
+                    connected = true
+                    status = "متصل به ${t.name} (AmneziaWG)"
+                }
+                is AwgState.Failed -> {
+                    connected = false
+                    status = "سرور وصل نشد: ${result.message}"
+                    ctx.startService(stopIntent(ctx))
+                }
+                else -> {
+                    connected = false
+                    status = "سرور وصل نشد: زمان انتظار تمام شد"
+                    ctx.startService(stopIntent(ctx))
+                }
+            }
+        }
+    }
+
     /** انتخاب سرور: اگر وصل هستیم، همان کار «قطع، انتخاب، اتصال» انجام می‌شود؛ وگرنه فقط انتخاب. */
     fun select(ctx: Context, cfg: VpnConfig) {
         if (connected || connecting) {
@@ -293,6 +346,21 @@ object SingBoxController {
     }
 
     /** تست پینگ واقعی؛ نتایج هر ۳۰۰ میلی‌ثانیه یک‌جا روی فهرست نشست می‌کنند تا لیست روان بماند. */
+    private var pingJob: Job? = null
+    private var pingFlushJob: Job? = null
+
+    /** پاک‌کردن پینگ‌های قبلی (هم در حافظه و هم در ذخیره). */
+    private fun clearPings(ctx: Context) {
+        TimeGuard.getSecurePrefs(ctx).edit().remove(PING_KEY).apply()
+        applyList(configs.map { it.copy(pingMs = -1L) })
+    }
+
+    /** توقف تست پینگ؛ نتیجه‌های تا این لحظه می‌مانند. */
+    fun stopPing() {
+        pingJob?.cancel()
+    }
+
+    /** تست پینگ واقعی؛ پینگ‌های قبلی پاک می‌شوند و نتیجه‌ها همان لحظه روی فهرست می‌نشینند. */
     fun pingAll(ctx: Context) {
         if (configs.isEmpty()) {
             status = "ابتدا سرورها را بروزرسانی کنید"
@@ -300,8 +368,10 @@ object SingBoxController {
         }
         if (busy) return
         if (connected || connecting) stop(ctx, "برای تست پینگ، اتصال قطع شد")
+        clearPings(ctx)
 
         busy = true
+        pinging = true
         val list = configs
         val total = list.size
         var done = 0
@@ -309,13 +379,14 @@ object SingBoxController {
         pendingPings.clear()
         status = "شروع تست پینگ برای $total سرور…"
 
-        scope.launch {
-            while (busy) {
+        pingFlushJob = scope.launch {
+            while (pinging) {
                 delay(300L)
                 flushPings()
             }
         }
-        scope.launch {
+        pingJob = scope.launch {
+            var completed = false
             try {
                 PingTester.pingAllConfigsRealHttp(
                     context = ctx,
@@ -330,10 +401,18 @@ object SingBoxController {
                         }
                     },
                 )
-                flushPings()
-                status = if (found > 0) "تست تمام شد: $found سرور پاسخ داد" else "هیچ سروری در این لحظه پاسخ نداد"
+                completed = true
             } finally {
+                flushPings()
                 busy = false
+                pinging = false
+                pingJob = null
+                pingFlushJob?.cancel()
+                status = when {
+                    !completed -> "تست پینگ متوقف شد ($done از $total)"
+                    found > 0 -> "تست تمام شد: $found سرور پاسخ داد"
+                    else -> "هیچ سروری در این لحظه پاسخ نداد"
+                }
             }
         }
     }
@@ -342,6 +421,7 @@ object SingBoxController {
 
     fun updateSubscriptions(ctx: Context) {
         if (busy) return
+        clearPings(ctx)
         busy = true
         status = "در حال دریافت سرورها از ساب‌لینک…"
         scope.launch {
