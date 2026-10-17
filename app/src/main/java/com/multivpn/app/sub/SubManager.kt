@@ -1,5 +1,7 @@
 package com.multivpn.app.sub
 
+import com.multivpn.app.awg.AwgConfig
+
 import android.util.Base64
 
 import android.content.Context
@@ -120,7 +122,7 @@ object SubManager {
                 line.startsWith("tuic://", ignoreCase = true) -> parseGenericUri(line, "tuic", "Sing-box (Xray)")
                 line.startsWith("awg://", ignoreCase = true) -> parseAwgUri(line)
                 line.startsWith("wg://", ignoreCase = true) ||
-                line.startsWith("wireguard://", ignoreCase = true) -> parseGenericUri(line, "awg", "AmneziaWG")
+                line.startsWith("wireguard://", ignoreCase = true) -> parseAwgUri(line)
                 line.startsWith("ovpn://", ignoreCase = true) -> parseGenericUri(line, "ovpn", "OpenVPN")
                 else -> null
             }
@@ -133,39 +135,21 @@ object SubManager {
         return list.filter { seen.add(dedupKey(it)) }
     }
 
-    /** awg://<base64 از متن کامل .conf>#نام — سرور از خط Endpoint خوانده می‌شود. */
+    /** هر فرمت AmneziaWG (awg/wg/wireguard، base64 یا URL، یک یا دو بار encode) به یک لینک استاندارد تبدیل می‌شود. */
     private fun parseAwgUri(line: String): VpnConfig? {
         return try {
-            val payload = line.substringAfter("://").substringBefore("#").trim()
-            val decoded = try {
-                String(Base64.decode(payload, Base64.DEFAULT), Charsets.UTF_8)
-            } catch (_: Exception) {
-                String(Base64.decode(payload, Base64.URL_SAFE), Charsets.UTF_8)
-            }
-            val endpointLine = decoded.lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.startsWith("Endpoint", ignoreCase = true) && it.contains("=") }
-                ?: return null
-            val endpoint = endpointLine.substringAfter("=").trim()
-            val host: String
-            val port: Int
-            if (endpoint.startsWith("[")) {
-                host = endpoint.substringBefore("]") + "]"
-                port = endpoint.substringAfter("]:", "").toIntOrNull() ?: return null
-            } else {
-                host = endpoint.substringBeforeLast(":")
-                port = endpoint.substringAfterLast(":").toIntOrNull() ?: return null
-            }
+            val canonical = AwgConfig.canonicalConf(line) ?: return null
+            val parsed = AwgConfig.parse(canonical) ?: return null
             val remark = line.substringAfter("#", "").let {
-                if (it.isNotBlank()) URLDecoder.decode(it, "UTF-8") else ""
+                if (it.isNotBlank()) URLDecoder.decode(it.replace("+", "%2B"), "UTF-8") else ""
             }
             VpnConfig(
-                name = remark.ifBlank { "AmneziaWG $host" },
+                name = remark.ifBlank { "AmneziaWG ${parsed.endpointHost}" },
                 coreType = "AmneziaWG",
                 protocol = "awg",
-                host = host,
-                port = port,
-                rawConfig = line,
+                host = parsed.endpointHost,
+                port = parsed.endpointPort,
+                rawConfig = AwgConfig.encodeLink(canonical),
             )
         } catch (_: Exception) {
             null

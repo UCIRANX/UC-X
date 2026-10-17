@@ -23,6 +23,7 @@ import (
 
 var (
 	mu      sync.Mutex
+	lastErr string
 	nextID  int32 = 1
 	devices       = map[int32]*device.Device{}
 )
@@ -73,6 +74,9 @@ func turnOn(iface string, fd int, settings string) (int32, error) {
 func Java_com_multivpn_app_awg_AwgNative_turnOn(env *C.JNIEnv, cls C.jclass, jIface C.jstring, fd C.jint, jSettings C.jstring) C.jint {
 	h, err := turnOn(jstrGo(env, jIface), int(fd), jstrGo(env, jSettings))
 	if err != nil {
+		mu.Lock()
+		lastErr = err.Error()
+		mu.Unlock()
 		return -1
 	}
 	return C.jint(h)
@@ -101,6 +105,16 @@ func Java_com_multivpn_app_awg_AwgNative_ipcGet(env *C.JNIEnv, cls C.jclass, h C
 		}
 	}
 	cs := C.CString(out)
+	defer C.free(unsafe.Pointer(cs))
+	return C.awgNewString(env, cs)
+}
+
+//export Java_com_multivpn_app_awg_AwgNative_lastError
+func Java_com_multivpn_app_awg_AwgNative_lastError(env *C.JNIEnv, cls C.jclass) C.jstring {
+	mu.Lock()
+	msg := lastErr
+	mu.Unlock()
+	cs := C.CString(msg)
 	defer C.free(unsafe.Pointer(cs))
 	return C.awgNewString(env, cs)
 }

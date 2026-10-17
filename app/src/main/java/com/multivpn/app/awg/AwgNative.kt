@@ -15,6 +15,10 @@ object AwgNative {
 
     @JvmStatic
     external fun ipcGet(handle: Int): String
+
+    /** متن آخرین خطای هسته. */
+    @JvmStatic
+    external fun lastError(): String
 }
 
 sealed class AwgState {

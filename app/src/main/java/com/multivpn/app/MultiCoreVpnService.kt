@@ -291,7 +291,7 @@ class MultiCoreVpnService : VpnService() {
                     ?: throw Exception("مجوز VPN داده نشد")
                 vpnInterface = pfd
                 val handle = AwgNative.turnOn("awg0", pfd.fd, AwgConfig.toUapi(parsed, endpointIp))
-                if (handle <= 0) throw Exception("هسته AmneziaWG اجرا نشد")
+                if (handle <= 0) throw Exception("هسته AmneziaWG اجرا نشد: " + runCatching { AwgNative.lastError() }.getOrDefault(""))
                 awgHandle = handle
                 tunnelUp = true
                 setPaused(false)
