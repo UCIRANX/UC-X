@@ -194,22 +194,38 @@ async function handleUnbind(msg, env, text) {
   return send(env, chatId, `اتصال ${formatDeviceId(deviceId)} آزاد شد.`);
 }
 
-// دستور ادمین: /long تعداد_روز شناسه — کد مدت‌دار فقط برای همان شناسه؛ رکورد کد عادی تغییر نمی‌کند
+// دستور ادمین: /long مدت شناسه — کد مدت‌دار فقط برای همان شناسه؛ رکورد کد عادی تغییر نمی‌کند
+// مدت: "20" یا "20d" = روز، "36h" = ساعت
 async function handleLong(msg, env, text) {
   const chatId = msg.chat.id;
   if (!env.ADMIN_ID || String(msg.from.id) !== String(env.ADMIN_ID)) {
     return send(env, chatId, "دسترسی ندارید.");
   }
   const parts = text.split(/\s+/);
-  const days = parseInt(parts[1] || "", 10);
+  const dur = parseDuration(parts[1] || "");
   const deviceId = normalizeDeviceId(parts[2] || "");
-  if (!Number.isFinite(days) || days < 1 || days > 3650 || !deviceId) {
-    return send(env, chatId, "فرمت: /long تعداد_روز شناسه\nمثال: /long 20 DMM-6QCR");
+  if (!dur || !deviceId) {
+    return send(env, chatId,
+      "فرمت: /long مدت شناسه\nمثال روز: /long 20 DMM-6QCR\nمثال ساعت: /long 36h DMM-6QCR");
   }
-  const { token, expiry } = await issueToken(env, deviceId, days * 86400);
-  await env.STATE.put(`admin:${deviceId}`, JSON.stringify({ token, expiry, days }));
+  const { token, expiry } = await issueToken(env, deviceId, dur.seconds);
+  await env.STATE.put(`admin:${deviceId}`, JSON.stringify({ token, expiry, seconds: dur.seconds }));
   return send(env, chatId,
-    `کد ${days} روزه برای ${formatDeviceId(deviceId)}:\n<code>${token}</code>\nاعتبار تا: <b>${fmtDate(expiry)}</b>`);
+    `کد ${dur.label} برای ${formatDeviceId(deviceId)}:\n<code>${token}</code>\nاعتبار تا: <b>${fmtDate(expiry)}</b>`);
+}
+
+// مدت: "20" یا "20d" = روز، "36h" = ساعت؛ حداقل ۱ ساعت و حداکثر ۳۶۵۰ روز
+function parseDuration(raw) {
+  const m = /^(\d+)([dh]?)$/i.exec(raw.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const unit = (m[2] || "d").toLowerCase();
+  if (unit === "h") {
+    if (n < 1 || n > 3650 * 24) return null;
+    return { seconds: n * 3600, label: `${n} ساعته` };
+  }
+  if (n < 1 || n > 3650) return null;
+  return { seconds: n * 86400, label: `${n} روزه` };
 }
 
 // ---------- کمک‌کننده‌ها ----------
