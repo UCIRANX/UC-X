@@ -121,7 +121,7 @@ async function handleDeviceId(msg, env, channel, text) {
 
   return send(env, chatId,
     `شناسه <code>${formatDeviceId(deviceId)}</code> دریافت شد.\n` +
-    `برای دریافت کد جدید، ${REQUIRED_POSTS} پست <b>جدید</b> از کانال @${channel} را برای همین ربات فوروارد کنید.`);
+    `برای دریافت کد جدید، ${REQUIRED_POSTS} پست <b>جدید</b> از کانال @${channel} را ری‌اکشن بزنید و برای همین ربات فوروارد کنید.`);
 }
 
 // مرحلهٔ دوم: فوروارد پست‌های کانال
