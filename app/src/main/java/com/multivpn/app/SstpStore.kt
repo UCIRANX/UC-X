@@ -10,6 +10,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.multivpn.app.sub.DohClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -193,11 +195,13 @@ object SstpSub {
         val text = (if (tunnel != null) withTimeoutOrNull(TUNNEL_TIMEOUT_MS) { fetchAll(tunnel) } else null)
             ?: fetchAll(null)
             ?: throw Exception("دریافت ساب‌لینک SSTP ناموفق بود")
-        val servers = LinkedHashMap<String, SstpServer>()
-        SstpParser.parse(text).forEach { servers.putIfAbsent(it.key, it) }
-        SstpStore.saveSub(ctx, servers.values.toList())
-        SstpStore.markUpdated(ctx)
-        return servers.size
+        return withContext(Dispatchers.IO) {
+            val servers = LinkedHashMap<String, SstpServer>()
+            SstpParser.parse(text).forEach { servers.putIfAbsent(it.key, it) }
+            SstpStore.saveSub(ctx, servers.values.toList())
+            SstpStore.markUpdated(ctx)
+            servers.size
+        }
     }
 
     fun schedule(ctx: Context) {

@@ -136,6 +136,7 @@ class MainActivity : ComponentActivity() {
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )
         handleOpenIntent(intent)
+        Thread { com.multivpn.app.security.TimeGuard.getSecurePrefs(applicationContext) }.start()
         setContent { UcTorTheme { AppRoot(onGuardConnect = ::guardConnect) } }
         window.decorView.post { requestVpnThenNotification() }
     }

@@ -310,8 +310,7 @@ object SingBoxController {
             cache.remove(old.url)
             SingBoxStore.savePersonalCache(ctx, cache)
         }
-        reloadSources(ctx)
-        rebuild()
+        reloadSourcesAsync(ctx)
     }
 
     fun togglePersonal(ctx: Context, index: Int) {
@@ -319,8 +318,7 @@ object SingBoxController {
         val old = personal[index]
         personal = personal.toMutableList().also { it[index] = old.copy(enabled = !old.enabled) }
         SingBoxStore.savePersonal(ctx, personal)
-        reloadSources(ctx)
-        rebuild()
+        reloadSourcesAsync(ctx)
     }
 
     /** حذف ساب‌لینک شخصی؛ سرورهایش با بروزرسانی بعدی حذف می‌شوند مگر قلب‌دار باشند. */
@@ -332,18 +330,29 @@ object SingBoxController {
         val cache = SingBoxStore.loadPersonalCache(ctx)
         cache.remove(removedUrl)
         SingBoxStore.savePersonalCache(ctx, cache)
-        reloadSources(ctx)
-        rebuild()
+        reloadSourcesAsync(ctx)
     }
 
     /** ساب‌لینک‌های ثابت + سرورهای ساب‌لینک‌های شخصی تیک‌خورده (از کش). */
-    private fun reloadSources(ctx: Context) {
+    /** تجزیهٔ منابع (سنگین)؛ باید روی رشتهٔ پس‌زمینه اجرا شود. */
+    private fun computeSubConfigs(ctx: Context): List<VpnConfig> {
         val builtin = SubManager.loadCachedConfigs(ctx)
         val cache = SingBoxStore.loadPersonalCache(ctx)
-        val extra = personal.filter { it.enabled }
-            .flatMap { cache[it.url].orEmpty() }
-            .flatMap { SubManager.parseText(it) }
-        subConfigs = builtin + extra
+        val enabled = personal.filter { it.enabled }
+        val extra = enabled.flatMap { cache[it.url].orEmpty() }.flatMap { SubManager.parseText(it) }
+        return builtin + extra
+    }
+
+    private fun reloadSources(ctx: Context) {
+        subConfigs = computeSubConfigs(ctx)
+    }
+
+    /** بعد از تغییر ساب‌لینک شخصی: تجزیه روی پس‌زمینه، سپس فهرست روی رشتهٔ اصلی. */
+    private fun reloadSourcesAsync(ctx: Context) {
+        scope.launch {
+            subConfigs = withContext(Dispatchers.IO) { computeSubConfigs(ctx) }
+            rebuild()
+        }
     }
 
     // ───────── اتصال ─────────
@@ -601,7 +610,7 @@ object SingBoxController {
         scope.launch {
             try {
                 val count = withTimeout(90_000L) { SubRefresh.refreshAll(ctx) }
-                reloadSources(ctx)
+                subConfigs = withContext(Dispatchers.IO) { computeSubConfigs(ctx) }
                 rebuild()
                 resetSelectionToFirst(ctx)
                 if (count > 0) {

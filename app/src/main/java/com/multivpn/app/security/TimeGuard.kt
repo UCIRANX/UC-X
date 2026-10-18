@@ -37,20 +37,30 @@ object TimeGuard {
         "https://www.google.com"
     )
 
+    @Volatile
+    private var cachedSecurePrefs: SharedPreferences? = null
+
+    /** نمونهٔ prefs رمزدار را فقط یک بار می‌سازد؛ ساختن هر بار آن روی رشتهٔ اصلی باعث ANR می‌شد. */
     fun getSecurePrefs(context: Context): SharedPreferences {
-        return try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                PREF_FILE,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (e: Exception) {
-            context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+        cachedSecurePrefs?.let { return it }
+        synchronized(this) {
+            cachedSecurePrefs?.let { return it }
+            val prefs = try {
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    context,
+                    PREF_FILE,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+            } catch (e: Exception) {
+                context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            }
+            cachedSecurePrefs = prefs
+            return prefs
         }
     }
 
