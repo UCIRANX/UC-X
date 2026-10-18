@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -224,6 +226,7 @@ private fun SelectedCard() {
 
 @Composable
 private fun TabsRow(awgTabState: androidx.compose.runtime.MutableState<Boolean>, allTitle: String, awgCount: Int) {
+    val ctx = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf(false to allTitle, true to "AmneziaWG ($awgCount)").forEach { (isAwg, label) ->
             val on = awgTabState.value == isAwg
@@ -232,7 +235,7 @@ private fun TabsRow(awgTabState: androidx.compose.runtime.MutableState<Boolean>,
                     .weight(1f)
                     .background(if (on) Violet else Surface1, RoundedCornerShape(50))
                     .border(1.dp, if (on) Violet else Violet.copy(alpha = 0.45f), RoundedCornerShape(50))
-                    .clickable { awgTabState.value = isAwg }
+                    .clickable { awgTabState.value = isAwg; SingBoxController.selectTab(ctx, isAwg) }
                     .padding(vertical = 8.dp, horizontal = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -339,29 +342,40 @@ private fun ActionButtons(showPersonal: androidx.compose.runtime.MutableState<Bo
     val context = LocalContext.current
     val ctl = SingBoxController
     val small = PaddingValues(horizontal = 2.dp, vertical = 0.dp)
+    val teal = Color(0xFF0E9AA7)
+    val amber = Color(0xFFE0A100)
+    val green = Color(0xFF2E9E5B)
+    val pink = Color(0xFFC2437D)
+    val dark = Color(0xFF111111)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        OutlinedButton(
+        Button(
             onClick = { ctl.updateSubscriptions(context) },
             enabled = !ctl.busy,
+            colors = ButtonDefaults.buttonColors(containerColor = teal, contentColor = Color.White,
+                disabledContainerColor = teal.copy(alpha = 0.45f), disabledContentColor = Color.White.copy(alpha = 0.7f)),
             contentPadding = small,
-            modifier = Modifier.weight(1f).height(34.dp),
-        ) { Text("بروزرسانی", fontSize = 11.sp, maxLines = 1) }
-        OutlinedButton(
+            modifier = Modifier.weight(1f).height(36.dp),
+        ) { Text("بروزرسانی", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+        Button(
             onClick = { if (ctl.pinging) ctl.stopPing() else ctl.pingAll(context) },
             enabled = ctl.pinging || !ctl.busy,
+            colors = ButtonDefaults.buttonColors(containerColor = amber, contentColor = dark,
+                disabledContainerColor = amber.copy(alpha = 0.45f), disabledContentColor = dark.copy(alpha = 0.7f)),
             contentPadding = small,
-            modifier = Modifier.weight(1f).height(34.dp),
-        ) { Text(if (ctl.pinging) "متوقف" else "تست پینگ", fontSize = 11.sp, maxLines = 1) }
-        OutlinedButton(
+            modifier = Modifier.weight(1f).height(36.dp),
+        ) { Text(if (ctl.pinging) "متوقف" else "تست پینگ", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+        Button(
             onClick = { ctl.addFromClipboard(context) },
+            colors = ButtonDefaults.buttonColors(containerColor = green, contentColor = Color.White),
             contentPadding = small,
-            modifier = Modifier.weight(1f).height(34.dp),
-        ) { Text("کلیپ‌برد", fontSize = 11.sp, maxLines = 1) }
-        OutlinedButton(
+            modifier = Modifier.weight(1f).height(36.dp),
+        ) { Text("کلیپ‌برد", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+        Button(
             onClick = { showPersonal.value = true },
+            colors = ButtonDefaults.buttonColors(containerColor = pink, contentColor = Color.White),
             contentPadding = small,
-            modifier = Modifier.weight(1f).height(34.dp),
-        ) { Text("ساب‌لینک", fontSize = 11.sp, maxLines = 1) }
+            modifier = Modifier.weight(1f).height(36.dp),
+        ) { Text("ساب‌لینک", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
     }
 }
 

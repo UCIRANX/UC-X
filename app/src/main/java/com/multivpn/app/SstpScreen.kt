@@ -104,13 +104,18 @@ fun SstpScreen() {
     var manual by remember { mutableStateOf(SstpStore.loadManual(context)) }
     var sub by remember { mutableStateOf(SstpStore.loadSub(context)) }
     var favs by remember { mutableStateOf(SstpStore.loadFav(context)) }
-    var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedKey by rememberSaveable { mutableStateOf<String?>(prefs.getString("SSTP_SELECTED", null)) }
     var pendingKey by rememberSaveable { mutableStateOf<String?>(null) }
     var tab by rememberSaveable { mutableStateOf(0) } // 0 = ساب‌لینک، 1 = دستی
     var note by rememberSaveable { mutableStateOf("") }
     var showManual by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var updated by remember { mutableStateOf(SstpStore.lastUpdated(context)) }
+
+    fun setSelected(key: String?) {
+        selectedKey = key
+        prefs.edit().putString("SSTP_SELECTED", key).apply()
+    }
 
     val favKeys = favs.map { it.key }.toSet()
     val subDisplay = favs + sub.filter { it.key !in favKeys }
@@ -139,7 +144,7 @@ fun SstpScreen() {
 
     /** اگر وصل یا در حال اتصال بودیم، اول کامل قطع می‌شود؛ بعد سرور جدید وصل می‌شود. */
     fun switchTo(s: SstpServer) {
-        selectedKey = s.key
+        setSelected(s.key)
         if (!rootOn && !paused) {
             requestConnect(s)
             return
@@ -199,9 +204,6 @@ fun SstpScreen() {
         Text(statusText, color = TextMain, fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (note.isNotBlank()) Text(note, color = TextSub, fontSize = 11.sp, textAlign = TextAlign.Center)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { showManual = true }, modifier = Modifier.weight(1f)) {
-                Text("سرور دستی", fontSize = 12.sp, maxLines = 1)
-            }
             OutlinedButton(
                 onClick = {
                     busy = true
@@ -210,6 +212,8 @@ fun SstpScreen() {
                         try {
                             val n = withTimeoutOrNull(60_000L) { SstpSub.refresh(context) }
                             note = if (n == null) "بروزرسانی ناموفق یا زمان‌بر بود" else "$n سرور دریافت شد"
+                            val first = SstpStore.loadFav(context).firstOrNull() ?: SstpStore.loadSub(context).firstOrNull()
+                            if (n != null && first != null) setSelected(first.key)
                         } catch (e: Exception) {
                             note = "بروزرسانی ناموفق: ${e.message}"
                         } finally {
@@ -223,6 +227,9 @@ fun SstpScreen() {
                 modifier = Modifier.weight(1f),
             ) {
                 Text(if (busy) "در حال بروزرسانی…" else "بروزرسانی", fontSize = 12.sp, maxLines = 1)
+            }
+            OutlinedButton(onClick = { showManual = true }, modifier = Modifier.weight(1f)) {
+                Text("سرور دستی", fontSize = 12.sp, maxLines = 1)
             }
         }
         Text(
@@ -315,7 +322,7 @@ fun SstpScreen() {
                                     tint = Danger,
                                     modifier = Modifier.size(18.dp).clickable {
                                         SstpStore.saveManual(context, manual.filter { it.key != s.key })
-                                        if (selectedKey == s.key) selectedKey = null
+                                        if (selectedKey == s.key) setSelected(null)
                                         reloadLists()
                                     },
                                 )
@@ -360,7 +367,7 @@ fun SstpScreen() {
             onSave = { s ->
                 SstpStore.saveManual(context, manual.filter { it.key != s.key } + s)
                 reloadLists()
-                selectedKey = s.key
+                setSelected(s.key)
                 tab = 1
                 showManual = false
             },

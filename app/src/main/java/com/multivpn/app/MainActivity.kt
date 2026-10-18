@@ -97,6 +97,15 @@ class MainActivity : ComponentActivity() {
         else UcgVpnService.send(this, UcgVpnService.ACTION_CONNECT)
     }
 
+    private fun handleOpenIntent(i: Intent?) {
+        if (i?.getStringExtra("open_mode") == "SSTP") ModeRequest.requested = "SSTP"
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleOpenIntent(intent)
+    }
+
     override fun onDestroy() {
         runCatching { unregisterReceiver(vpnReceiver) }
         super.onDestroy()
@@ -126,6 +135,7 @@ class MainActivity : ComponentActivity() {
         ContextCompat.registerReceiver(
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )
+        handleOpenIntent(intent)
         setContent { UcTorTheme { AppRoot(onGuardConnect = ::guardConnect) } }
         window.decorView.post { requestVpnThenNotification() }
     }

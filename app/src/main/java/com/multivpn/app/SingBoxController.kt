@@ -210,6 +210,7 @@ object SingBoxController {
         personal = SingBoxStore.loadPersonal(ctx)
         reloadSources(ctx)
         rebuild()
+        selectTab(ctx, false)
         status = if (configs.isEmpty()) "ابتدا سرورها را بروزرسانی کنید" else "آماده اتصال"
 
         scope.launch {
@@ -350,6 +351,30 @@ object SingBoxController {
     private fun stopIntent(ctx: Context): Intent =
         Intent(ctx, MultiCoreVpnService::class.java).setAction(MultiCoreVpnService.ACTION_STOP)
 
+    private fun savedSel(ctx: Context, awg: Boolean): String? =
+        TimeGuard.getSecurePrefs(ctx).getString(if (awg) "singbox_sel_awg" else "singbox_sel_all", null)
+
+    private fun saveSel(ctx: Context, awg: Boolean, key: String) {
+        TimeGuard.getSecurePrefs(ctx).edit().putString(if (awg) "singbox_sel_awg" else "singbox_sel_all", key).apply()
+    }
+
+    /** انتخاب آخرین سرور همان تب (AmneziaWG یا بقیه)؛ اگر نبود، اولین سرور آن تب. */
+    fun selectTab(ctx: Context, awg: Boolean) {
+        val list = displayed.filter { (it.coreType == "AmneziaWG") == awg }
+        val pick = list.firstOrNull { it.id == savedSel(ctx, awg) } ?: list.firstOrNull() ?: return
+        selectedId = pick.id
+        saveSel(ctx, awg, pick.id)
+    }
+
+    /** بعد از بروزرسانی: اولین سرور هر تب انتخاب می‌شود. */
+    private fun resetSelectionToFirst(ctx: Context) {
+        val all = displayed.filter { it.coreType != "AmneziaWG" }
+        val awg = displayed.filter { it.coreType == "AmneziaWG" }
+        all.firstOrNull()?.let { saveSel(ctx, false, it.id) }
+        awg.firstOrNull()?.let { saveSel(ctx, true, it.id) }
+        (all.firstOrNull() ?: awg.firstOrNull())?.let { selectedId = it.id }
+    }
+
     fun stop(ctx: Context, message: String = "اتصال قطع شد") {
         val active = connected || connecting || connJob != null
         connJob?.cancel()
@@ -391,6 +416,7 @@ object SingBoxController {
         if (wasActive) stop(ctx, "در حال تغییر سرور…")
 
         selectedId = t.id
+        saveSel(ctx, t.coreType == "AmneziaWG", t.id)
         connecting = true
         status = "در حال اتصال به ${t.name}…"
         connJob = scope.launch {
@@ -439,6 +465,7 @@ object SingBoxController {
         if (wasActive) stop(ctx, "در حال تغییر سرور…")
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
         selectedId = t.id
+        saveSel(ctx, t.coreType == "AmneziaWG", t.id)
         connecting = true
         status = "در حال اتصال به ${t.name}…"
         connJob = scope.launch {
@@ -483,6 +510,7 @@ object SingBoxController {
             start(ctx, cfg)
         } else {
             selectedId = cfg.id
+            saveSel(ctx, cfg.coreType == "AmneziaWG", cfg.id)
             status = "${cfg.name} انتخاب شد"
         }
     }
@@ -575,6 +603,7 @@ object SingBoxController {
                 val count = withTimeout(90_000L) { SubRefresh.refreshAll(ctx) }
                 reloadSources(ctx)
                 rebuild()
+                resetSelectionToFirst(ctx)
                 if (count > 0) {
                     SubUpdate.markUpdated(ctx)
                     loadedStamp = SubUpdate.lastUpdatedMs(ctx)

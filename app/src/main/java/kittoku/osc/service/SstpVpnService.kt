@@ -27,6 +27,7 @@ import kittoku.osc.preference.OscPrefKey
 import kittoku.osc.preference.accessor.getBooleanPrefValue
 import kittoku.osc.preference.accessor.getIntPrefValue
 import kittoku.osc.preference.accessor.getStringPrefValue
+import com.multivpn.app.MainActivity
 import kittoku.osc.preference.accessor.getURIPrefValue
 import kittoku.osc.preference.accessor.resetReconnectionLife
 import kittoku.osc.preference.accessor.setBooleanPrefValue
@@ -256,6 +257,14 @@ internal class SstpVpnService : VpnService() {
         else -> "$bps B/s"
     }
 
+    private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
+        this, 20,
+        Intent(this, MainActivity::class.java)
+            .putExtra("open_mode", "SSTP")
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
     private fun actionIntent(action: String, code: Int): PendingIntent = PendingIntent.getService(
         this, code,
         Intent(this, SstpVpnService::class.java).setAction(action),
@@ -276,6 +285,7 @@ internal class SstpVpnService : VpnService() {
             it.setContentTitle(if (label.isBlank()) "SSTP" else "SSTP · $label")
             it.setContentText(text)
             it.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            it.setContentIntent(openAppIntent())
             it.addAction(R.drawable.ic_baseline_close_24, "توقف موقت", actionIntent(ACTION_VPN_PAUSE, 3))
             it.addAction(R.drawable.ic_baseline_close_24, "قطع کامل", actionIntent(ACTION_VPN_DISCONNECT, 4))
         }.build()
@@ -290,6 +300,7 @@ internal class SstpVpnService : VpnService() {
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
             it.setContentTitle(if (label.isBlank()) "SSTP" else "SSTP · $label")
             it.setContentText("متوقف موقت")
+            it.setContentIntent(openAppIntent())
             it.addAction(R.drawable.ic_baseline_vpn_lock_24, "اتصال مجدد", actionIntent(ACTION_VPN_CONNECT, 1))
             it.addAction(R.drawable.ic_baseline_close_24, "قطع کامل", actionIntent(ACTION_VPN_DISCONNECT, 2))
         }.build()
@@ -320,7 +331,7 @@ internal class SstpVpnService : VpnService() {
                 prev = cur
                 prevT = now
                 val connected = getStringPrefValue(OscPrefKey.HOME_STATUS, prefs).isNotBlank()
-                val text = if (connected) "متصل · ↓ ${fmtSpeed(down)}   ↑ ${fmtSpeed(up)}" else "در حال اتصال…"
+                val text = if (connected) "متصل\n↓ ${fmtSpeed(down)}        ↑ ${fmtSpeed(up)}" else "در حال اتصال…"
                 tryNotify(buildStatusNotification(text), NOTIFICATION_DISCONNECT_ID)
             }
         }

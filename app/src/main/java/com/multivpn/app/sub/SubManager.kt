@@ -31,7 +31,8 @@ object SubManager {
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/Uciranir.txt",
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt",
         "https://uciran.app/23NscP",
-        "https://zaya.io/UCX"
+        "https://zaya.io/UCX",
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcAmnezia.txt"
     )
 
     private const val MAX_NESTED_DEPTH = 2

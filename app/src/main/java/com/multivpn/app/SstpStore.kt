@@ -10,6 +10,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.multivpn.app.sub.DohClient
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -158,11 +159,12 @@ object SstpStore {
 /** بروزرسانی ساب‌لینک‌های SSTP (دستی و هر ۱۲ ساعت). لینک‌های تودرتو داخل فایل‌ها هم خوانده می‌شوند. */
 object SstpSub {
     private const val MAX_DEPTH = 2
+    private const val TUNNEL_TIMEOUT_MS = 20_000L
 
-    private suspend fun collect(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder) {
+    private suspend fun collect(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder, proxy: java.net.Proxy?) {
         if (depth > MAX_DEPTH || !visited.add(url)) return
         val text = try {
-            DohClient.fetchUrlText(url)
+            DohClient.fetchUrlText(url, proxy)
         } catch (_: Exception) {
             return
         }
@@ -170,21 +172,29 @@ object SstpSub {
             val line = raw.trim()
             if (line.isEmpty()) continue
             if (line.startsWith("http://", true) || line.startsWith("https://", true)) {
-                collect(line, depth + 1, visited, out)
+                collect(line, depth + 1, visited, out, proxy)
             } else {
                 out.append(line).append('\n')
             }
         }
     }
 
-    /** همهٔ ساب‌لینک‌ها؛ تعداد سرورهای یکتا را برمی‌گرداند. */
-    suspend fun refresh(ctx: Context): Int {
+    /** همهٔ ساب‌لینک‌ها از یک مسیر (پروکسی یا مستقیم)؛ اگر چیزی نبود null. */
+    private suspend fun fetchAll(proxy: java.net.Proxy?): String? {
         val out = StringBuilder()
         val visited = mutableSetOf<String>()
-        for (url in SSTP_SUB_URLS) collect(url, 0, visited, out)
-        if (out.isBlank()) throw Exception("دریافت ساب‌لینک SSTP ناموفق بود")
+        for (url in SSTP_SUB_URLS) collect(url, 0, visited, out, proxy)
+        return if (out.isBlank()) null else out.toString()
+    }
+
+    /** اول از VPN فعال (سینگ‌باکس/گارد/تور)؛ اگر خطا یا خالی بود، مستقیم. */
+    suspend fun refresh(ctx: Context): Int {
+        val tunnel = SubRefresh.tunnelProxy(ctx)
+        val text = (if (tunnel != null) withTimeoutOrNull(TUNNEL_TIMEOUT_MS) { fetchAll(tunnel) } else null)
+            ?: fetchAll(null)
+            ?: throw Exception("دریافت ساب‌لینک SSTP ناموفق بود")
         val servers = LinkedHashMap<String, SstpServer>()
-        SstpParser.parse(out.toString()).forEach { servers.putIfAbsent(it.key, it) }
+        SstpParser.parse(text).forEach { servers.putIfAbsent(it.key, it) }
         SstpStore.saveSub(ctx, servers.values.toList())
         SstpStore.markUpdated(ctx)
         return servers.size

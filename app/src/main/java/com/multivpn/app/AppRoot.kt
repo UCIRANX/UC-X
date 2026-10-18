@@ -101,6 +101,11 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
     }
 
     // تور و Sing-Box هر دو VPN سراسری لازم دارند؛ وقتی تور شروع می‌شود Sing-Box قطع می‌شود
+    LaunchedEffect(ModeRequest.requested) {
+        if (ModeRequest.requested == "SSTP") mode = AppMode.SSTP
+        ModeRequest.requested = null
+    }
+
     LaunchedEffect(torPhase) {
         if (torPhase == Phase.CONNECTING) {
             SingBoxController.stop(context, "سینگ باکس برای اتصال تور قطع شد")
@@ -184,4 +189,9 @@ private fun ModeSwitch(mode: AppMode, onChange: (AppMode) -> Unit) {
             }
         }
     }
+}
+
+/** درخواست باز کردن یک بخش از بیرون (مثلاً کلیک روی اعلان). */
+object ModeRequest {
+    var requested by mutableStateOf<String?>(null)
 }
