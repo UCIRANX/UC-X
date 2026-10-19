@@ -95,7 +95,7 @@ private fun vpnManager(ctx: Context): VpnManager = ctx.getSystemService(VpnManag
  */
 @RequiresApi(Build.VERSION_CODES.S)
 fun ikev2ConsentIntent(ctx: Context, s: Ikev2Server): Intent? {
-    val ike = IkeSessionParams.Builder(ctx).setServerHostname(s.server)
+    val ike = IkeSessionParams.Builder().setServerHostname(s.server)
     if (s.remoteId.isNotBlank()) {
         ike.setRemoteIdentification(IkeFqdnIdentification(s.remoteId.trim()))
     }
