@@ -68,6 +68,7 @@ fun Ikev2Screen() {
     var connected by remember { mutableStateOf(false) }
     var note by rememberSaveable { mutableStateOf("") }
     var showManual by rememberSaveable { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Ikev2Server?>(null) }
 
     fun setSelected(key: String?) {
         selectedKey = key
@@ -195,6 +196,9 @@ fun Ikev2Screen() {
                             )
                             Text(s.server, color = Cyan, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
+                        TextButton(onClick = { editing = s }) {
+                            Text("ویرایش", fontSize = 12.sp, color = Violet)
+                        }
                         Icon(
                             Icons.Filled.Delete,
                             contentDescription = "حذف",
@@ -212,34 +216,40 @@ fun Ikev2Screen() {
         }
     }
 
-    if (showManual) {
+    if (showManual || editing != null) {
         Ikev2ManualDialog(
-            onDismiss = { showManual = false },
+            initial = editing,
+            onDismiss = {
+                showManual = false
+                editing = null
+            },
             onSave = { s ->
-                val rest = list.filter { it.key != s.key } + s
+                val old = editing
+                val rest = list.filter { it.key != s.key && (old == null || it.key != old.key) } + s
                 Ikev2Store.save(context, rest)
                 list = rest
                 setSelected(s.key)
                 showManual = false
+                editing = null
             },
         )
     }
 }
 
 @Composable
-private fun Ikev2ManualDialog(onDismiss: () -> Unit, onSave: (Ikev2Server) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var server by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var remoteId by remember { mutableStateOf("") }
-    var psk by remember { mutableStateOf("") }
+private fun Ikev2ManualDialog(initial: Ikev2Server?, onDismiss: () -> Unit, onSave: (Ikev2Server) -> Unit) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var server by remember { mutableStateOf(initial?.server ?: "") }
+    var username by remember { mutableStateOf(initial?.username ?: "") }
+    var password by remember { mutableStateOf(initial?.password ?: "") }
+    var remoteId by remember { mutableStateOf(initial?.remoteId ?: "") }
+    var psk by remember { mutableStateOf(initial?.psk ?: "") }
     var error by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Surface1,
-        title = { Text("سرور IKEv2 دستی", fontWeight = FontWeight.Bold) },
+        title = { Text(if (initial == null) "سرور IKEv2 دستی" else "ویرایش سرور IKEv2", fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("نام پروفایل (اختیاری)") }, modifier = Modifier.fillMaxWidth())
