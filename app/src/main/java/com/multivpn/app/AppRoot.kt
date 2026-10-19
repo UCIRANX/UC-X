@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
-enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس"), SSTP("SSTP"), IKEV2("IKEv2") }
+enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس"), SSTP("SSTP") }
 
 private val TextSub = Color(0xFFB4B4C8)
 
@@ -93,7 +93,6 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
                 SingBoxController.stop(context, "مهلت لایسنس تمام شد")
                 stopGuardIfActive(context)
                 stopSstpIfActive(context)
-                stopIkev2IfActive(context)
                 TorController.disconnect()
             }
             wasValid = nowValid
@@ -112,7 +111,6 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
             SingBoxController.stop(context, "سینگ باکس برای اتصال تور قطع شد")
             stopGuardIfActive(context)
             stopSstpIfActive(context)
-            stopIkev2IfActive(context)
         }
     }
 
@@ -148,7 +146,6 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
                         AppMode.TOR -> MainScreen()
                         AppMode.GUARD -> UcgTheme { GuardRoot(onConnect = onGuardConnect) }
                         AppMode.SSTP -> SstpScreen()
-                        AppMode.IKEV2 -> Ikev2Screen()
                     }
                 }
             }

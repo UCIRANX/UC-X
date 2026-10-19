@@ -91,7 +91,6 @@ class MainActivity : ComponentActivity() {
     fun guardConnect() {
         SingBoxController.stop(this, "سینگ باکس برای اتصال گارد قطع شد")
         stopSstpIfActive(this)
-        stopIkev2IfActive(this)
         if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
         val consent = VpnService.prepare(this)
         if (consent != null) guardVpnPermission.launch(consent)

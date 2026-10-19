@@ -35,7 +35,6 @@ fun sendSstp(ctx: Context, action: String) {
 fun stopOthersForSstp(ctx: Context) {
     SingBoxController.stop(ctx, "سینگ باکس برای اتصال SSTP قطع شد")
     stopGuardIfActive(ctx)
-    stopIkev2IfActive(ctx)
     if (TorController.state.value.phase != Phase.IDLE) TorController.disconnect()
 }
 
