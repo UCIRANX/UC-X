@@ -1,0 +1,61 @@
+#ifndef TUNNEL_FORGE_L2TP_AVPS_H
+#define TUNNEL_FORGE_L2TP_AVPS_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define L2TP_AVP_MSG_TYPE 0
+#define L2TP_AVP_RESULT_CODE 1
+#define L2TP_AVP_ASSIGNED_TUNNEL 9
+#define L2TP_AVP_ASSIGNED_SESSION 14
+#define L2TP_AVP_CALL_SERIAL 15
+
+#define L2TP_MSG_SCCRQ 1
+#define L2TP_MSG_SCCRP 2
+#define L2TP_MSG_SCCCN 3
+#define L2TP_MSG_STOPCCN 4
+#define L2TP_MSG_HELLO 6
+#define L2TP_MSG_ICRQ 10
+#define L2TP_MSG_ICRP 11
+#define L2TP_MSG_ICCN 12
+#define L2TP_MSG_CDN 14
+
+/** Minimum L2TP control header size (flags/ver, len, tid, sid, ns, nr). */
+#define L2TP_CTRL_HDR 12
+
+/** Append a mandatory uint16 AVP to an AVP buffer. */
+int l2tp_avp_append_u16(uint8_t *buf, size_t cap, size_t *off, uint16_t attr_type, uint16_t value);
+
+/** Append a mandatory uint32 AVP to an AVP buffer. */
+int l2tp_avp_append_u32(uint8_t *buf, size_t cap, size_t *off, uint16_t attr_type, uint32_t value);
+
+/** Append a mandatory Result Code AVP with result+error and no message. */
+int l2tp_avp_append_result(uint8_t *buf, size_t cap, size_t *off, uint16_t result_code, uint16_t error_code);
+
+/** Build an L2TPv2 control packet around a prebuilt AVP buffer. */
+int l2tp_ctrl_build(uint8_t *out, size_t cap, uint16_t tunnel_id, uint16_t session_id, uint16_t ns, uint16_t nr,
+                    const uint8_t *avps, size_t avp_len, size_t *out_len);
+
+/** Find first AVP of [attr_type] with value length >= 2; read first u16 of value into [out]. */
+int l2tp_avp_first_u16(const uint8_t *pkt, size_t len, uint16_t attr_type, uint16_t *out);
+
+/** Read Result Code AVP (type 1): returns 0 if absent or result code is 0; -1 on error/nonzero. */
+int l2tp_ctrl_result_ok(const uint8_t *pkt, size_t len);
+
+/**
+ * Read Result Code AVP (type 1) details.
+ * Returns:
+ *   0 when AVP is present and parsed,
+ *   1 when AVP is absent,
+ *  -1 on malformed AVP.
+ */
+int l2tp_ctrl_result_details(const uint8_t *pkt, size_t len, uint16_t *result_code, uint16_t *error_code,
+                             char *error_msg, size_t error_msg_cap);
+
+/** Message Type AVP (type 0) value. */
+int l2tp_ctrl_msg_type(const uint8_t *pkt, size_t len, uint16_t *mt);
+
+/** Read Ns/Nr from fixed control header (after 12-byte prefix). @return 0 on success. */
+int l2tp_ctrl_get_ns_nr(const uint8_t *pkt, size_t len, uint16_t *ns, uint16_t *nr);
+
+#endif

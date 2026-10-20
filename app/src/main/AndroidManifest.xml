@@ -109,5 +109,33 @@
                 android:value="SSTP VPN" />
         </service>
 
+        <!-- L2TP/IPsec (موتور TunnelForge، GPL-3.0) -->
+        <service
+            android:name="io.github.evokelektrique.tunnelforge.TunnelVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="L2TP VPN" />
+        </service>
+
+        <!-- OpenConnect / AnyConnect (libopenconnect، LGPL-2.1) -->
+        <service
+            android:name="com.multivpn.app.oc.OcVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="OpenConnect VPN" />
+        </service>
+
     </application>
 </manifest>
