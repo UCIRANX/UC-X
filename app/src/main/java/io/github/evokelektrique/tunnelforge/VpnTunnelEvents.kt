@@ -9,8 +9,14 @@ import androidx.annotation.Keep
  */
 @Keep
 object VpnTunnelEvents {
+    /** آخرین پیام موتور؛ در متن خطا به کاربر نشان داده می‌شود. */
+    @Volatile
+    var lastEngineLog: String = ""
+
     @JvmStatic
     fun emitEngineLogFromNative(priority: Int, tag: String?, message: String?) {
-        Log.println(priority, "L2TP-${tag ?: "native"}", message ?: "")
+        val line = message ?: ""
+        Log.println(priority, "L2TP-${tag ?: "native"}", line)
+        lastEngineLog = line
     }
 }

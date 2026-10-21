@@ -39,6 +39,7 @@ class TunnelVpnService : VpnService() {
         const val STATE_CONNECTED = "connected"
         const val STATE_FAILED = "failed"
 
+        private const val CONNECT_TIMEOUT_MS = 60_000L
         private const val CHANNEL_ID = "l2tp_vpn"
         private const val NOTIFICATION_ID = 2101
         private const val DEFAULT_MTU = 1400
@@ -88,6 +89,9 @@ class TunnelVpnService : VpnService() {
     @Volatile
     private var tun: ParcelFileDescriptor? = null
 
+    @Volatile
+    private var attemptSeq: Int = 0
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -118,12 +122,31 @@ class TunnelVpnService : VpnService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…"))
+                runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…")) }
                 stateFlow.value = STATE_CONNECTING to ""
+                val attempt = ++attemptSeq
                 worker = Thread({ runTunnel(server, user, password, psk, mtu) }, "l2tp-engine").also { it.start() }
+                startWatchdog(attempt)
             }
         }
         return START_NOT_STICKY
+    }
+
+    /** اگر تا مهلت به «متصل» نرسیم، مذاکره را متوقف و علت (آخرین پیام موتور) را نشان می‌دهیم. */
+    private fun startWatchdog(attempt: Int) {
+        Thread({
+            try {
+                Thread.sleep(CONNECT_TIMEOUT_MS)
+            } catch (_: InterruptedException) {
+            }
+            if (attempt == attemptSeq && stateFlow.value.first == STATE_CONNECTING) {
+                runCatching { VpnBridge.nativeStopTunnel() }
+                val last = VpnTunnelEvents.lastEngineLog
+                stateFlow.value = STATE_FAILED to
+                    "مهلت اتصال تمام شد؛ سرور پاسخ نداد" + (if (last.isNotBlank()) " · پیام موتور: $last" else "")
+                runCatching { stopSelf() }
+            }
+        }, "l2tp-watchdog").start()
     }
 
     private fun runTunnel(server: String, user: String, password: String, psk: String, mtu: Int) {
@@ -140,7 +163,8 @@ class TunnelVpnService : VpnService() {
             return
         }
         if (negotiated != 0) {
-            fail("اتصال L2TP برقرار نشد (کد $negotiated)")
+            val last = VpnTunnelEvents.lastEngineLog
+            fail("اتصال L2TP برقرار نشد (کد $negotiated)" + (if (last.isNotBlank()) " · پیام موتور: $last" else ""))
             return
         }
 

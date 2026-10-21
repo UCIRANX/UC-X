@@ -116,7 +116,7 @@ class OcVpnService : VpnService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…"))
+                runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…")) }
                 stateFlow.value = STATE_CONNECTING to ""
                 worker = Thread({ runTunnel(p) }, "oc-engine").also { it.start() }
             }
@@ -125,18 +125,20 @@ class OcVpnService : VpnService() {
     }
 
     private fun runTunnel(p: OcParams) {
-        val s = OcSession(p, { fd -> instance?.protect(fd) ?: false })
-        session = s
+        var s: OcSession? = null
         val error: String? = try {
+            // هر خطای بارگذاری کتابخانه (مثلاً نبودن libopenconnect.so) باید اینجا گرفته شود، نه کرش برنامه
+            s = OcSession(p) { fd -> instance?.protect(fd) ?: false }
+            session = s
             tunnel(s, p)
         } catch (t: Throwable) {
             "خطای موتور OpenConnect: ${t.message ?: t.javaClass.simpleName}"
         }
         closeTun()
-        runCatching { s.destroy() }
+        runCatching { s?.destroy() }
         session = null
         stateFlow.value = if (error == null) STATE_IDLE to "" else STATE_FAILED to error
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         stopSelf()
     }
 
