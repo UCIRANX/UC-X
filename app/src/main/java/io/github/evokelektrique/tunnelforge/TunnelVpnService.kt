@@ -39,7 +39,7 @@ class TunnelVpnService : VpnService() {
         const val STATE_CONNECTED = "connected"
         const val STATE_FAILED = "failed"
 
-        private const val CONNECT_TIMEOUT_MS = 60_000L
+        private const val CONNECT_TIMEOUT_MS = 150_000L
         private const val CHANNEL_ID = "l2tp_vpn"
         private const val NOTIFICATION_ID = 2101
         private const val DEFAULT_MTU = 1400
@@ -140,10 +140,9 @@ class TunnelVpnService : VpnService() {
             } catch (_: InterruptedException) {
             }
             if (attempt == attemptSeq && stateFlow.value.first == STATE_CONNECTING) {
-                runCatching { VpnBridge.nativeStopTunnel() }
-                val last = VpnTunnelEvents.lastEngineLog
                 stateFlow.value = STATE_FAILED to
-                    "مهلت اتصال تمام شد؛ سرور پاسخ نداد" + (if (last.isNotBlank()) " · پیام موتور: $last" else "")
+                    "مهلت ۱۵۰ ثانیه تمام شد · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}"
+                runCatching { VpnBridge.nativeStopTunnel() }
                 runCatching { stopSelf() }
             }
         }, "l2tp-watchdog").start()
@@ -163,8 +162,13 @@ class TunnelVpnService : VpnService() {
             return
         }
         if (negotiated != 0) {
-            val last = VpnTunnelEvents.lastEngineLog
-            fail("اتصال L2TP برقرار نشد (کد $negotiated)" + (if (last.isNotBlank()) " · پیام موتور: $last" else ""))
+            // اگر مهلت قبلاً خطا ثبت کرده، پیام مهلت را بازنویسی نمی‌کنیم
+            if (stateFlow.value.first != STATE_FAILED) {
+                fail("اتصال L2TP برقرار نشد (کد $negotiated) · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}")
+            } else {
+                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                runCatching { stopSelf() }
+            }
             return
         }
 
@@ -218,7 +222,7 @@ class TunnelVpnService : VpnService() {
     }
 
     private fun fail(message: String) {
-        stateFlow.value = STATE_FAILED to message
+        if (stateFlow.value.first != STATE_FAILED) stateFlow.value = STATE_FAILED to message
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
