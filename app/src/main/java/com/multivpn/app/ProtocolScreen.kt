@@ -202,7 +202,7 @@ fun ProtocolScreen() {
 
     // بار اول که هنوز ساب‌لینکی گرفته نشده، بروزرسانی خودکار
     LaunchedEffect(Unit) {
-        if (ProtoLists.lastUpdated(context) == 0L) {
+        if (ProtoLists.lastUpdated(context) == 0L || subList.any { it.source.isBlank() }) {
             note = ProtoLists.refreshSub(context)
             subList = ProtoLists.loadSub(context)
             favSub = ProtoLists.favSub(context)

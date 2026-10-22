@@ -11,6 +11,7 @@ import android.net.VpnManager
 import android.net.eap.EapSessionConfig
 import android.net.ipsec.ike.ChildSaProposal
 import android.net.ipsec.ike.IkeFqdnIdentification
+import android.net.ipsec.ike.IkeSaProposal
 import android.net.ipsec.ike.IkeSessionParams
 import android.net.ipsec.ike.IkeTunnelConnectionParams
 import android.net.ipsec.ike.SaProposal
@@ -97,9 +98,25 @@ private fun vpnManager(ctx: Context): VpnManager = ctx.getSystemService(VpnManag
  */
 @RequiresApi(Build.VERSION_CODES.S)
 fun ikev2ConsentIntent(ctx: Context, s: Ikev2Server): Intent? {
-    // پیشنهادهای IKE در API عمومی قابل تنظیم نیستند؛ اندروید پیش‌فرض‌ها را می‌فرستد
+    // پیشنهادهای IKE با addIkeSaProposal (نام API در اندروید ۱۲ به بعد)؛ بدون آن build() شکست می‌خورد
     val ike = IkeSessionParams.Builder()
         .setServerHostname(s.server)
+        .addIkeSaProposal(
+            IkeSaProposal.Builder()
+                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_256)
+                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
+                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
+                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
+                .build()
+        )
+        .addIkeSaProposal(
+            IkeSaProposal.Builder()
+                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_256)
+                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_NONE)
+                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
+                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
+                .build()
+        )
     if (s.remoteId.isNotBlank()) {
         ike.setRemoteIdentification(IkeFqdnIdentification(s.remoteId.trim()))
     }

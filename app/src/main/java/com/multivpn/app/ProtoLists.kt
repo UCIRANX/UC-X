@@ -258,7 +258,7 @@ object ProtoLists {
                 JSONObject()
                     .put("t", it.type.name).put("n", it.name).put("h", it.host).put("o", it.port)
                     .put("u", it.user).put("p", it.password).put("k", it.psk).put("r", it.remoteId)
-                    .put("g", it.authGroup).put("c", it.certPin).put("raw", it.rawKey).put("cc", it.country)
+                    .put("g", it.authGroup).put("c", it.certPin).put("raw", it.rawKey).put("cc", it.country).put("src", it.source)
             )
         }
         return arr.toString()
@@ -281,6 +281,7 @@ object ProtoLists {
                 certPin = o.optString("c"),
                 rawKey = o.optString("raw"),
                 country = o.optString("cc"),
+                source = o.optString("src"),
             )
         }
     }.getOrDefault(emptyList())
