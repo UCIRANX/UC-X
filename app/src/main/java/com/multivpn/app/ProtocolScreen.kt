@@ -72,6 +72,7 @@ import ir.uciran.uctor.ui.Violet
 import com.multivpn.app.log.AppLogger
 import com.multivpn.app.oc.OcParams
 import com.multivpn.app.oc.OcVpnService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val PTextMain = Color(0xFFEDEDF5)
@@ -108,7 +109,7 @@ private fun fieldsFor(t: VpnType): List<Field> = when (t) {
     VpnType.OPENCONNECT -> listOf(
         Field("name", "نام", optional = true),
         Field("server", "سرور (host یا URL)"),
-        Field("port", "پورت"),
+        Field("port", "پورت", optional = true),
         Field("username", "نام کاربری"),
         Field("password", "رمز", secret = true),
         Field("authGroup", "Auth group / portal", optional = true),
@@ -117,11 +118,11 @@ private fun fieldsFor(t: VpnType): List<Field> = when (t) {
 }
 
 private fun initialFor(s: ProtoServer?, t: VpnType): Map<String, String> {
-    if (s == null) return if (t == VpnType.OPENCONNECT) mapOf("port" to "443") else emptyMap()
+    if (s == null) return emptyMap()
     return when (t) {
         VpnType.IKEV2 -> mapOf("name" to s.name, "server" to s.host, "username" to s.user, "password" to s.password, "remoteId" to s.remoteId, "psk" to s.psk)
         VpnType.L2TP -> mapOf("name" to s.name, "server" to s.host, "psk" to s.psk, "username" to s.user, "password" to s.password)
-        VpnType.OPENCONNECT -> mapOf("name" to s.name, "server" to s.host, "port" to s.port.toString(), "username" to s.user, "password" to s.password, "authGroup" to s.authGroup, "certPin" to s.certPin)
+        VpnType.OPENCONNECT -> mapOf("name" to s.name, "server" to s.host, "port" to (if (s.port > 0) s.port.toString() else ""), "username" to s.user, "password" to s.password, "authGroup" to s.authGroup, "certPin" to s.certPin)
     }
 }
 
@@ -199,6 +200,15 @@ fun ProtocolScreen() {
     // پیام‌های موقت (مثل «قطع شد») با تغییر واقعی وضعیت پاک می‌شوند
     LaunchedEffect(ikev2Connected, l2tpState.first, ocState.first) { note = "" }
 
+    // بار اول که هنوز ساب‌لینکی گرفته نشده، بروزرسانی خودکار
+    LaunchedEffect(Unit) {
+        if (ProtoLists.lastUpdated(context) == 0L) {
+            note = ProtoLists.refreshSub(context)
+            subList = ProtoLists.loadSub(context)
+            favSub = ProtoLists.favSub(context)
+        }
+    }
+
     fun findServer(key: String?): ProtoServer? =
         (manualList + subList + favSub).firstOrNull { it.key == key }
 
@@ -261,8 +271,38 @@ fun ProtocolScreen() {
 
     fun disconnectAll() {
         if (ikev2Connected) stopIkev2(context)
-        if (l2tpConnected || l2tpBusy) context.startService(TunnelVpnService.disconnectIntent(context))
-        if (ocConnected || ocBusy) context.startService(OcVpnService.disconnectIntent(context))
+        if (TunnelVpnService.state.value.first != TunnelVpnService.STATE_IDLE) {
+            context.startService(TunnelVpnService.disconnectIntent(context))
+        }
+        if (OcVpnService.state.value.first != OcVpnService.STATE_IDLE) {
+            context.startService(OcVpnService.disconnectIntent(context))
+        }
+    }
+
+    /** وضعیت زنده (نه مقدار قدیمی ترکیب) برای استفاده داخل کوروتین. */
+    fun liveActive(): Boolean {
+        val l = TunnelVpnService.state.value.first
+        val o = OcVpnService.state.value.first
+        return ikev2Connected ||
+            l == TunnelVpnService.STATE_CONNECTED || l == TunnelVpnService.STATE_CONNECTING ||
+            o == OcVpnService.STATE_CONNECTED || o == OcVpnService.STATE_CONNECTING
+    }
+
+    /**
+     * انتخاب کانفیگ دیگر وقتی یکی فعال است: اول اتصال کامل قطع، بعد کانفیگ انتخابی وصل می‌شود.
+     */
+    fun switchTo(s: ProtoServer) {
+        if (s.key == selectedKey && anyActive) return
+        setSelected(s.key)
+        if (!liveActive()) return
+        scope.launch {
+            disconnectAll()
+            val end = System.currentTimeMillis() + 15_000L
+            while (liveActive() && System.currentTimeMillis() < end) delay(200L)
+            // فرصت برای پایان نخ‌های بومی قبل از اتصال جدید
+            delay(1_000L)
+            connectSelected()
+        }
     }
 
     // ───── کارت خطا: خلاصه‌ی کوتاه؛ جزئیات در پنجرهٔ لاگ ─────
@@ -291,7 +331,7 @@ fun ProtocolScreen() {
     val header: @Composable () -> Unit = {
         Box(
             modifier = Modifier
-                .size(if (landscape) 96.dp else 118.dp)
+                .size(if (landscape) 84.dp else 96.dp)
                 .background(Brush.radialGradient(listOf(accent.copy(alpha = 0.95f), accent.copy(alpha = 0.3f))), CircleShape)
                 .clickable { if (anyActive) disconnectAll() else connectSelected() },
             contentAlignment = Alignment.Center,
@@ -356,7 +396,7 @@ fun ProtocolScreen() {
                     emptyText = if (ProtoLists.SUB_URLS.isEmpty()) "لینک ساب‌لینک این بخش هنوز تنظیم نشده است" else "سروری از ساب‌لینک نیست؛ بروزرسانی کنید",
                     selectedKey = selectedKey,
                     isFav = { it.key in favKeys },
-                    onSelect = { setSelected(it.key) },
+                    onSelect = { switchTo(it) },
                     onFav = {
                         ProtoLists.toggleSubFav(context, it)
                         favSub = ProtoLists.favSub(context)
@@ -372,7 +412,7 @@ fun ProtocolScreen() {
                     emptyText = "سرور دستی ندارید؛ با دکمهٔ «افزودن سرور دستی» اضافه کنید",
                     selectedKey = selectedKey,
                     isFav = { it.key in favKeys },
-                    onSelect = { setSelected(it.key) },
+                    onSelect = { switchTo(it) },
                     onFav = {
                         ProtoLists.toggleManFav(context, it.key)
                         favMan = ProtoLists.favManKeys(context)
@@ -425,7 +465,7 @@ fun ProtocolScreen() {
             Column(
                 Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) { header() }
             Column(Modifier.weight(1.2f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 tabs()
@@ -437,7 +477,7 @@ fun ProtocolScreen() {
         Column(
             Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             header()
             tabs()
@@ -492,8 +532,10 @@ fun ProtocolScreen() {
             initial = initialFor(editing, dialogType),
             onDismiss = { dialogOpen = false },
             onSave = { v ->
-                val port = if (dialogType == VpnType.OPENCONNECT) v["port"].orEmpty().toIntOrNull() ?: 443 else 0
-                if (dialogType == VpnType.OPENCONNECT && v["port"].orEmpty().toIntOrNull() == null) {
+                val rawPort = v["port"].orEmpty().trim()
+                val portOk = rawPort.isEmpty() || rawPort.toIntOrNull() != null
+                val port = if (dialogType == VpnType.OPENCONNECT) rawPort.toIntOrNull() ?: 0 else 0
+                if (dialogType == VpnType.OPENCONNECT && !portOk) {
                     "پورت باید عدد باشد"
                 } else {
                     val item = ProtoServer(
@@ -572,7 +614,7 @@ private fun ServerList(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "${s.type.label} · ${s.host}${if (s.type == VpnType.OPENCONNECT) ":${s.port}" else ""}",
+                        "${sstpCountryName(s.country).let { if (it.isBlank()) "" else "$it · " }}${s.type.label} · ${s.host}${if (s.type == VpnType.OPENCONNECT) ":${s.port}" else ""}",
                         color = c,
                         fontSize = 10.sp,
                         maxLines = 1,

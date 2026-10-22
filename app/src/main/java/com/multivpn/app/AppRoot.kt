@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** دو حالت برنامه: Sing-Box (سرورهای ساب‌لینک) و تور (موتور UC-Tor). */
-enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس"), SSTP("SSTP"), IKEV2("پروتکل‌ها") }
+enum class AppMode(val label: String) { GUARD("گارد"), TOR("تور"), VPN("سینگ باکس"), SSTP("SSTP"), IKEV2("پلاس") }
 
 private val TextSub = Color(0xFFB4B4C8)
 

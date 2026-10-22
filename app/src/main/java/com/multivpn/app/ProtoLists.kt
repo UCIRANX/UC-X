@@ -38,6 +38,8 @@ data class ProtoServer(
     val authGroup: String,
     val certPin: String,
     val rawKey: String,
+    /** کد دو حرفی کشور از ساب‌لینک (اختیاری)؛ نام فارسی آن در نمایش ساخته می‌شود. */
+    val country: String = "",
 ) {
     val key: String get() = "${type.name}|$host|$port|$user"
     val label: String get() = if (name.isNotBlank()) name else host
@@ -54,7 +56,11 @@ object ProtoLists {
      * لینک‌های ساب‌لینک بخش پروتکل‌ها. هنوز تنظیم نشده‌اند؛ پس از ارسال لینک و
      * نمونهٔ فرمت، اینجا اضافه می‌شوند.
      */
-    val SUB_URLS: List<String> = emptyList()
+    val SUB_URLS: List<String> = listOf(
+        "https://raw.githubusercontent.com/UCIRANX/Comp/refs/heads/main/UcL2tp.txt",
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcPlus.txt",
+        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt",
+    )
 
     private fun prefs(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx)
 
@@ -155,26 +161,45 @@ object ProtoLists {
     }
 
     /**
-     * بروزرسانی ساب‌لینک‌های این بخش؛ پیام نتیجه را برمی‌گرداند.
-     * اول از VPN فعال (سینگ‌باکس/گارد/تور) رد می‌شود؛ اگر خطا داد، مستقیم.
+     * بروزرسانی ساب‌لینک‌های بخش پلاس؛ لینک‌های تودرتو داخل فایل‌ها هم خوانده می‌شوند.
+     * اول از VPN فعال رد می‌شود؛ اگر خطا داد، مستقیم.
      */
     suspend fun refreshSub(ctx: Context): String {
-        if (SUB_URLS.isEmpty()) return "لینک ساب‌لینک این بخش هنوز تنظیم نشده است"
         val tunnel = SubRefresh.tunnelProxy(ctx)
         var text: String? = null
-        if (tunnel != null) text = withTimeoutOrNull(20_000L) { fetchAllText(tunnel) }
-        if (text == null) text = fetchAllText(null)
+        if (tunnel != null) text = withTimeoutOrNull(20_000L) { collectAll(tunnel) }
+        if (text == null) text = collectAll(null)
         if (text == null) return "دریافت ساب‌لینک ناموفق بود"
-        // فرمت سرورهای این بخش هنوز مشخص نیست؛ تا تعریف شدن، چیزی ذخیره نمی‌شود
-        return "فرمت ساب‌لینک این بخش هنوز تعریف نشده است"
+        val servers = LinkedHashMap<String, ProtoServer>()
+        PlusParser.parse(text).forEach { servers.putIfAbsent(it.key, it) }
+        saveSub(ctx, servers.values.toList())
+        markUpdated(ctx)
+        return "${servers.size} سرور از ساب‌لینک دریافت شد"
     }
 
-    private suspend fun fetchAllText(proxy: java.net.Proxy?): String? {
-        val sb = StringBuilder()
-        for (u in SUB_URLS) {
-            runCatching { sb.append(DohClient.fetchUrlText(u, proxy)).append('\n') }
+    private suspend fun collectAll(proxy: java.net.Proxy?): String? {
+        val out = StringBuilder()
+        val visited = mutableSetOf<String>()
+        for (u in SUB_URLS) collect(u, 0, visited, out, proxy)
+        return if (out.isBlank()) null else out.toString()
+    }
+
+    private suspend fun collect(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder, proxy: java.net.Proxy?) {
+        if (depth > 2 || !visited.add(url)) return
+        val text = try {
+            DohClient.fetchUrlText(url, proxy)
+        } catch (_: Exception) {
+            return
         }
-        return if (sb.isBlank()) null else sb.toString()
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            if (line.startsWith("http://", true) || line.startsWith("https://", true)) {
+                collect(line, depth + 1, visited, out, proxy)
+            } else {
+                out.append(line).append('\n')
+            }
+        }
     }
 
     /** بروزرسانی خودکار هر ۲۴ ساعت. */
@@ -183,6 +208,15 @@ object ProtoLists {
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
             .build()
         WorkManager.getInstance(ctx).enqueueUniquePeriodicWork("proto-sub-24h", ExistingPeriodicWorkPolicy.KEEP, request)
+    }
+
+    private const val K_UPDATED = "PROTO_SUB_UPDATED"
+
+    /** زمان آخرین بروزرسانی موفق ساب‌لینک بخش پلاس (۰ یعنی هرگز). */
+    fun lastUpdated(ctx: Context): Long = prefs(ctx).getLong(K_UPDATED, 0L)
+
+    private fun markUpdated(ctx: Context) {
+        prefs(ctx).edit().putLong(K_UPDATED, System.currentTimeMillis()).apply()
     }
 
     // ───── انتخاب ─────
@@ -207,7 +241,7 @@ object ProtoLists {
                 JSONObject()
                     .put("t", it.type.name).put("n", it.name).put("h", it.host).put("o", it.port)
                     .put("u", it.user).put("p", it.password).put("k", it.psk).put("r", it.remoteId)
-                    .put("g", it.authGroup).put("c", it.certPin).put("raw", it.rawKey)
+                    .put("g", it.authGroup).put("c", it.certPin).put("raw", it.rawKey).put("cc", it.country)
             )
         }
         return arr.toString()
@@ -229,6 +263,7 @@ object ProtoLists {
                 authGroup = o.optString("g"),
                 certPin = o.optString("c"),
                 rawKey = o.optString("raw"),
+                country = o.optString("cc"),
             )
         }
     }.getOrDefault(emptyList())
@@ -240,5 +275,36 @@ class ProtoSubWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         ListenableWorker.Result.success()
     } catch (_: Exception) {
         ListenableWorker.Result.retry()
+    }
+}
+
+/**
+ * تجزیهٔ ساب‌لینک بخش پلاس. فرمت هر خط (فیلد خالی = مقدار خالی، بدون پیش‌فرض):
+ *   IKEV2:server:port:username:password:psk:remoteid:name:country
+ *   L2TP:server:port:username:password:psk:name:country
+ *   OPENCONNECT:server:port:username:password:authgroup:certpin:name:country
+ * خطوطی که پیشوند شناخته‌شده ندارند نادیده گرفته می‌شوند.
+ */
+object PlusParser {
+    fun parse(text: String): List<ProtoServer> = text.lines().mapNotNull { parseLine(it.trim()) }
+
+    private fun parseLine(line: String): ProtoServer? {
+        if (!line.contains(':')) return null
+        val type = when (line.substringBefore(':').trim().uppercase()) {
+            "IKEV2" -> VpnType.IKEV2
+            "L2TP" -> VpnType.L2TP
+            "OPENCONNECT" -> VpnType.OPENCONNECT
+            else -> return null
+        }
+        val f = line.substringAfter(':').split(':')
+        fun at(i: Int): String = f.getOrNull(i)?.trim().orEmpty()
+        val host = at(0)
+        if (host.isBlank()) return null
+        val port = at(1).toIntOrNull() ?: 0
+        return when (type) {
+            VpnType.IKEV2 -> ProtoServer(type, at(6), host, port, at(2), at(3), at(4), at(5), "", "", "", at(7))
+            VpnType.L2TP -> ProtoServer(type, at(5), host, port, at(2), at(3), at(4), "", "", "", "", at(6))
+            VpnType.OPENCONNECT -> ProtoServer(type, at(6), host, port, at(2), at(3), "", "", at(4), at(5), "", at(7))
+        }
     }
 }

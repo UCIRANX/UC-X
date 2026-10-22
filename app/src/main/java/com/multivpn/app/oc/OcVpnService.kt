@@ -147,6 +147,10 @@ class OcVpnService : VpnService() {
             fail("سرور و نام کاربری الزامی است")
             return
         }
+        if (p.port <= 0) {
+            fail("پورت سرور خالی است")
+            return
+        }
         serverLabel = p.server
         runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…", "OpenConnect · ${p.server}")) }
         stateFlow.value = STATE_CONNECTING to ""
@@ -260,7 +264,8 @@ class OcVpnService : VpnService() {
     private fun startSpeed() {
         stopSpeed()
         val t = Thread({
-            var prev = VpnNotify.tunCounters() ?: (0L to 0L)
+            val uid = applicationInfo.uid
+            var prev = VpnNotify.counters(uid)
             var prevT = SystemClock.elapsedRealtime()
             while (!Thread.currentThread().isInterrupted) {
                 try {
@@ -268,11 +273,7 @@ class OcVpnService : VpnService() {
                 } catch (_: InterruptedException) {
                     break
                 }
-                val cur = VpnNotify.tunCounters()
-                if (cur == null) {
-                    updateNotification("متصل", "OpenConnect · $serverLabel")
-                    continue
-                }
+                val cur = VpnNotify.counters(uid)
                 val now = SystemClock.elapsedRealtime()
                 val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
                 val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()

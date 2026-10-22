@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.TrafficStats
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.io.File
@@ -24,6 +25,13 @@ object VpnNotify {
             if (nums.size < 9) null else nums[0].toLong() to nums[8].toLong()
         }
     }.getOrNull()
+
+    /**
+     * شمارندهٔ واقعی برای سرعت: اول رابط tun، و اگر خوانده نشد، آمار UID خود برنامه
+     * (ترافیک تونل که موتور از سوکت‌های همین برنامه می‌فرستد). هرگز صفر ساختگی نیست.
+     */
+    fun counters(uid: Int): Pair<Long, Long> =
+        tunCounters() ?: (TrafficStats.getUidRxBytes(uid).coerceAtLeast(0L) to TrafficStats.getUidTxBytes(uid).coerceAtLeast(0L))
 
     fun speedText(bps: Long): String = when {
         bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)

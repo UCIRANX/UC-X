@@ -282,9 +282,8 @@ internal class SstpVpnService : VpnService() {
             it.setOnlyAlertOnce(true)
             it.setSilent(true)
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
-            it.setContentTitle(if (label.isBlank()) "SSTP" else "SSTP · $label")
-            it.setContentText(text)
-            it.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            it.setContentTitle(text)
+            it.setContentText(if (label.isBlank()) "SSTP" else "SSTP · $label")
             it.setContentIntent(openAppIntent())
             it.addAction(R.drawable.ic_baseline_close_24, "توقف موقت", actionIntent(ACTION_VPN_PAUSE, 3))
             it.addAction(R.drawable.ic_baseline_close_24, "قطع کامل", actionIntent(ACTION_VPN_DISCONNECT, 4))
@@ -331,7 +330,7 @@ internal class SstpVpnService : VpnService() {
                 prev = cur
                 prevT = now
                 val connected = getStringPrefValue(OscPrefKey.HOME_STATUS, prefs).isNotBlank()
-                val text = if (connected) "متصل\n↓ ${fmtSpeed(down)}        ↑ ${fmtSpeed(up)}" else "در حال اتصال…"
+                val text = if (connected) "↓ ${fmtSpeed(down)}   ↑ ${fmtSpeed(up)}" else "در حال اتصال…"
                 tryNotify(buildStatusNotification(text), NOTIFICATION_DISCONNECT_ID)
             }
         }
