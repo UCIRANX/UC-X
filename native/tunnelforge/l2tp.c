@@ -849,3 +849,18 @@ int l2tp_dispatch_incoming(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
     return 0;
   return ppp_dispatch_ppp_frame(esp_fd, esp, peer, peer_len, s, ppp, ppp_ptr, ppp_len, endpoint);
 }
+
+/* Acknowledge a control frame that arrived while PPP was running (see ppp.c recv_ppp). */
+int l2tp_ack_control_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                           l2tp_session_t *s, const uint8_t *data, size_t len) {
+  if (s == NULL || esp == NULL || peer == NULL || data == NULL || len < 2)
+    return -1;
+  uint16_t flags = util_read_be16(data + 0);
+  if ((flags & 0x8000u) == 0)
+    return 0; /* data frame: no control sequence to acknowledge */
+  uint16_t peer_ns = 0;
+  uint16_t peer_nr = 0;
+  if (l2tp_ctrl_get_ns_nr(data, len, &peer_ns, &peer_nr) == 0)
+    ingest_peer_ns(s, peer_ns);
+  return send_zlb(esp_fd, esp, peer, peer_len, s);
+}

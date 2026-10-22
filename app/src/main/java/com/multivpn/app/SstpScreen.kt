@@ -109,6 +109,7 @@ fun SstpScreen() {
     var tab by rememberSaveable { mutableStateOf(0) } // 0 = ساب‌لینک، 1 = دستی
     var note by rememberSaveable { mutableStateOf("") }
     var showManual by rememberSaveable { mutableStateOf(false) }
+    var editingManual by remember { mutableStateOf<SstpServer?>(null) }
     var busy by remember { mutableStateOf(false) }
     var updated by remember { mutableStateOf(SstpStore.lastUpdated(context)) }
 
@@ -316,6 +317,9 @@ fun SstpScreen() {
                                 modifier = Modifier.weight(1f),
                             )
                             if (tab == 1) {
+                                TextButton(onClick = { editingManual = s; showManual = true }) {
+                                    Text("ویرایش", color = Violet, fontSize = 12.sp)
+                                }
                                 Icon(
                                     Icons.Filled.Delete,
                                     contentDescription = "حذف",
@@ -363,9 +367,12 @@ fun SstpScreen() {
 
     if (showManual) {
         ManualServerDialog(
-            onDismiss = { showManual = false },
+            initial = editingManual,
+            onDismiss = { showManual = false; editingManual = null },
             onSave = { s ->
-                SstpStore.saveManual(context, manual.filter { it.key != s.key } + s)
+                val old = editingManual
+                SstpStore.saveManual(context, manual.filter { it.key != s.key && (old == null || it.key != old.key) } + s)
+                editingManual = null
                 reloadLists()
                 setSelected(s.key)
                 tab = 1
@@ -381,18 +388,18 @@ private fun Spacer8() {
 }
 
 @Composable
-private fun ManualServerDialog(onDismiss: () -> Unit, onSave: (SstpServer) -> Unit) {
-    var host by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("443") }
-    var user by remember { mutableStateOf("") }
-    var pass by remember { mutableStateOf("") }
-    var country by remember { mutableStateOf("") }
+private fun ManualServerDialog(initial: SstpServer?, onDismiss: () -> Unit, onSave: (SstpServer) -> Unit) {
+    var host by remember { mutableStateOf(initial?.host ?: "") }
+    var port by remember { mutableStateOf((initial?.port ?: 443).toString()) }
+    var user by remember { mutableStateOf(initial?.user ?: "") }
+    var pass by remember { mutableStateOf(initial?.pass ?: "") }
+    var country by remember { mutableStateOf(initial?.country ?: "") }
     var error by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Surface1,
-        title = { Text("سرور SSTP دستی", fontWeight = FontWeight.Bold) },
+        title = { Text(if (initial == null) "سرور SSTP دستی" else "ویرایش سرور SSTP", fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(host, { host = it }, singleLine = true, label = { Text("آدرس (هاست یا IP)") }, modifier = Modifier.fillMaxWidth())

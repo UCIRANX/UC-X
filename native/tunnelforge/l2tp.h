@@ -62,6 +62,13 @@ int l2tp_data_extract_ppp(const uint8_t *plain, size_t plain_len, const l2tp_ses
  * Demux one decrypted L2TP payload: control messages vs data channel PPP toward @p endpoint.
  * @return L2TP_DISPATCH_* code; REMOTE_CLOSED when peer tears down session.
  */
+/**
+ * Acknowledge an L2TP control frame received outside the dispatcher (e.g. during PPP).
+ * Sends a ZLB with Nr = peer Ns + 1. Data frames (T bit clear) are ignored. @return 0 on success.
+ */
+int l2tp_ack_control_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                           l2tp_session_t *s, const uint8_t *data, size_t len);
+
 int l2tp_dispatch_incoming(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
                            l2tp_session_t *s, const uint8_t *data, size_t len, packet_endpoint_t *endpoint,
                            ppp_session_t *ppp);

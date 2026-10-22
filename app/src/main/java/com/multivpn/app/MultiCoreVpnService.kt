@@ -227,10 +227,11 @@ class MultiCoreVpnService : VpnService() {
 
     /** مسیر Xray: شمارندهٔ خود رابط تونل (فقط ترافیک VPN). AmneziaWG: مجموع قبلی. */
     private fun readCounters(): Pair<Long, Long> {
-        if (awgHandle == 0) {
-            tunCounters()?.let { return it }
-        }
-        return TrafficStats.getTotalRxBytes().coerceAtLeast(0L) to TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+        // شمارندهٔ خود رابط tun (هم Xray و هم AmneziaWG). TrafficStats کل ترافیک دستگاه است
+        // و ترافیک تونل را دوبار (روی شبکه و روی tun) می‌شمارد؛ به همین دلیل عدد دو برابر می‌شد.
+        tunCounters()?.let { return it }
+        val uid = applicationInfo.uid
+        return TrafficStats.getUidRxBytes(uid).coerceAtLeast(0L) to TrafficStats.getUidTxBytes(uid).coerceAtLeast(0L)
     }
 
     private fun tunCounters(): Pair<Long, Long>? = runCatching {

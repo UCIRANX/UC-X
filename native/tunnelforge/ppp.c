@@ -4,6 +4,8 @@
  * for the current L2TP session is available.
  */
 #include "ppp.h"
+#include "l2tp.h"
+#include "l2tp_avps.h"
 
 #include "engine.h"
 #include "esp_udp.h"
@@ -92,7 +94,8 @@ static long long ppp_now_ms(void) {
  *
  * @return PPP payload length on success; -1 on cancel, timeout, socket error, or oversize payload.
  */
-static int recv_ppp(int esp_fd, esp_keys_t *esp, l2tp_session_t *l2tp, uint8_t *out, size_t cap, int ms) {
+static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                    l2tp_session_t *l2tp, uint8_t *out, size_t cap, int ms) {
   struct timeval start;
   gettimeofday(&start, NULL);
   for (;;) {
@@ -167,6 +170,21 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, l2tp_session_t *l2tp, uint8_t *
     size_t ppp_len = 0;
     if (l2tp_data_extract_ppp(plain, plen, l2tp, &ppp_ptr, &ppp_len, 0) != 0) {
       uint16_t flags = util_read_be16(plain + 0);
+      if ((flags & 0x8000u) != 0) {
+        /* فریم کنترلی سرور (مثلاً تکرار ICCN/Hello): باید تأیید شود، وگرنه سرور آن را دوباره می‌فرستد
+           و LCP هرگز پاسخ نمی‌دهد. */
+        uint16_t ctrl_mt = 0;
+        if (l2tp_ctrl_msg_type(plain, plen, &ctrl_mt) != 0)
+          ctrl_mt = 0; /* ZLB: بدون Message Type */
+        if (l2tp_ack_control_frame(esp_fd, esp, peer, peer_len, l2tp, plain, plen) != 0) {
+          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv control ack failed mt=%u flags=0x%04x plen=%zu",
+                            (unsigned)ctrl_mt, (unsigned)flags, plen);
+        } else {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp recv control frame acked mt=%u flags=0x%04x plen=%zu",
+                            (unsigned)ctrl_mt, (unsigned)flags, plen);
+        }
+        continue;
+      }
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv l2tp not-ppp-data flags=0x%04x plen=%zu", (unsigned)flags,
                         plen);
       continue;
@@ -446,7 +464,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int pending_resend_cr_after_ack = 0;
   /* Phase 2: bounded receive/process loop until our current request id is acknowledged. */
   for (int round = 0; round < 16 && !got_ack; round++) {
-    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 4000);
+    int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 4000);
     if (n < 8) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp lcp: recv below minimum n=%d round=%d", n, round);
       continue;
@@ -639,7 +657,7 @@ static int ppp_auth_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   uint8_t in[4096];
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: start mschapv2");
   for (int i = 0; i < 16; i++) {
-    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+    int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
     if (n < 10)
       continue;
     const uint8_t *p = in;
@@ -686,7 +704,7 @@ static int ppp_auth_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr 
 
     /* Wait for CHAP Success (3) or Failure (4) after MS-CHAPv2 Response. */
     for (int j = 0; j < 16; j++) {
-      n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+      n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
       if (n < 8)
         continue;
       ppp_strip(in, (size_t)n, &p, &len);
@@ -723,7 +741,7 @@ static int ppp_auth_chap_md5(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   uint8_t in[4096];
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: start chap-md5");
   for (int i = 0; i < 16; i++) {
-    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+    int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
     if (n < 10)
       continue;
     const uint8_t *p = in;
@@ -766,7 +784,7 @@ static int ppp_auth_chap_md5(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       return -1;
 
     for (int j = 0; j < 16; j++) {
-      n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+      n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
       if (n < 8)
         continue;
       ppp_strip(in, (size_t)n, &p, &len);
@@ -812,7 +830,7 @@ static int ppp_auth_pap(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer
 
   uint8_t in[4096];
   for (int i = 0; i < 12; i++) {
-    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+    int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
     if (n < 8)
       continue;
     const uint8_t *p = in;
@@ -977,7 +995,7 @@ static int ppp_ipcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr
   int got_ack = 0;
   /* Phase 2: process IPCP exchanges until our current request id is acknowledged. */
   for (int round = 0; round < 32 && !got_ack; round++) {
-    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+    int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
     if (n < 8) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp ipcp: recv short/timeout n=%d round=%d", n, round);
       if (ppp_now_ms() - last_cr_send_ms >= resend_after_ms) {

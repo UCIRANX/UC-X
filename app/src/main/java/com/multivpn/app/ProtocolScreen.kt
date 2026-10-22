@@ -2,6 +2,7 @@ package com.multivpn.app
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,18 +25,27 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,8 +53,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -53,356 +64,356 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ir.uciran.uctor.ui.Surface1
-import android.content.Intent
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import com.multivpn.app.log.AppLogger
-import androidx.compose.runtime.collectAsState
 import io.github.evokelektrique.tunnelforge.TunnelVpnService
+import ir.uciran.uctor.ui.Cyan
+import ir.uciran.uctor.ui.Green
+import ir.uciran.uctor.ui.Surface1
+import ir.uciran.uctor.ui.Violet
+import com.multivpn.app.log.AppLogger
 import com.multivpn.app.oc.OcParams
 import com.multivpn.app.oc.OcVpnService
+import kotlinx.coroutines.launch
 
 private val PTextMain = Color(0xFFEDEDF5)
 private val PTextSub = Color(0xFFB4B4C8)
 private val PDanger = Color(0xFFFF6B6B)
-private val PGreen = Color(0xFF3DDC97)
 private val PIkev2 = Color(0xFF7C5CFF)
 private val PL2tp = Color(0xFF00B4D8)
 private val POc = Color(0xFFFF8A3D)
-private val PSub = Color(0xFFE85D9A)
 
-/** بخش‌های صفحه: IKEv2، L2TP/IPsec، OpenConnect و لیست ساب‌لینک (در آینده). */
-private val SECTION_TITLES = listOf("IKEv2", "L2TP/IPsec", "OpenConnect", "ساب‌لینک")
-private val SECTION_COLORS = listOf(PIkev2, PL2tp, POc, PSub)
+private fun typeColor(t: VpnType): Color = when (t) {
+    VpnType.IKEV2 -> PIkev2
+    VpnType.L2TP -> PL2tp
+    VpnType.OPENCONNECT -> POc
+}
 
-private data class Field(val key: String, val label: String, val secret: Boolean = false, val optional: Boolean = false, val numeric: Boolean = false)
+private data class Field(val key: String, val label: String, val secret: Boolean = false, val optional: Boolean = false)
 
-private val IKEV2_FIELDS = listOf(
-    Field("name", "نام پروفایل", optional = true),
-    Field("server", "سرور"),
-    Field("username", "نام کاربری"),
-    Field("password", "رمز", secret = true, optional = true),
-    Field("remoteId", "Server identity", optional = true),
-    Field("psk", "PSK (اگر پر شود، به جای EAP)", secret = true, optional = true),
-)
-private val L2TP_FIELDS = listOf(
-    Field("name", "نام پروفایل", optional = true),
-    Field("server", "سرور"),
-    Field("psk", "IPSec pre-shared key (PSK)", secret = true),
-    Field("username", "User ID"),
-    Field("password", "رمز", secret = true, optional = true),
-)
-private val OC_FIELDS = listOf(
-    Field("name", "نام", optional = true),
-    Field("server", "سرور (host یا URL)"),
-    Field("port", "پورت", numeric = true),
-    Field("username", "نام کاربری"),
-    Field("password", "رمز", secret = true),
-    Field("authGroup", "Auth group / portal", optional = true),
-    Field("certPin", "Server cert pin (sha256:...)", optional = true),
-)
+private fun fieldsFor(t: VpnType): List<Field> = when (t) {
+    VpnType.IKEV2 -> listOf(
+        Field("name", "نام پروفایل", optional = true),
+        Field("server", "سرور"),
+        Field("username", "نام کاربری"),
+        Field("password", "رمز", secret = true, optional = true),
+        Field("remoteId", "Server identity", optional = true),
+        Field("psk", "PSK (اگر پر شود، به جای EAP)", secret = true, optional = true),
+    )
+    VpnType.L2TP -> listOf(
+        Field("name", "نام پروفایل", optional = true),
+        Field("server", "سرور"),
+        Field("psk", "IPSec pre-shared key (PSK)", secret = true),
+        Field("username", "User ID"),
+        Field("password", "رمز", secret = true, optional = true),
+    )
+    VpnType.OPENCONNECT -> listOf(
+        Field("name", "نام", optional = true),
+        Field("server", "سرور (host یا URL)"),
+        Field("port", "پورت"),
+        Field("username", "نام کاربری"),
+        Field("password", "رمز", secret = true),
+        Field("authGroup", "Auth group / portal", optional = true),
+        Field("certPin", "Server cert pin (pin-sha256:...)", optional = true),
+    )
+}
 
-/** صفحهٔ اتصال‌های پیشرفته: یک بخش یکپارچه با سه پروتکل و لیست ساب‌لینک. */
+private fun initialFor(s: ProtoServer?, t: VpnType): Map<String, String> {
+    if (s == null) return if (t == VpnType.OPENCONNECT) mapOf("port" to "443") else emptyMap()
+    return when (t) {
+        VpnType.IKEV2 -> mapOf("name" to s.name, "server" to s.host, "username" to s.user, "password" to s.password, "remoteId" to s.remoteId, "psk" to s.psk)
+        VpnType.L2TP -> mapOf("name" to s.name, "server" to s.host, "psk" to s.psk, "username" to s.user, "password" to s.password)
+        VpnType.OPENCONNECT -> mapOf("name" to s.name, "server" to s.host, "port" to s.port.toString(), "username" to s.user, "password" to s.password, "authGroup" to s.authGroup, "certPin" to s.certPin)
+    }
+}
+
+private fun ProtoServer.toIkev2() = Ikev2Server(name, host, user, password, remoteId, psk)
+
+/** شروع L2TP یا OpenConnect؛ VPNهای دیگر قبلاً قطع می‌شوند. */
+private fun startServer(context: Context, s: ProtoServer) {
+    stopOthersForIkev2(context)
+    stopIkev2IfActive(context)
+    AppLogger.init(context)
+    when (s.type) {
+        VpnType.L2TP -> {
+            AppLogger.log("UI", "شروع L2TP به ${s.host}")
+            context.startService(TunnelVpnService.connectIntent(context, s.host, s.user, s.password, s.psk))
+        }
+        VpnType.OPENCONNECT -> {
+            AppLogger.log("UI", "شروع OpenConnect به ${s.host}:${s.port}")
+            context.startService(
+                OcVpnService.connectIntent(context, OcParams(s.host, s.port, s.user, s.password, s.authGroup, s.certPin)),
+            )
+        }
+        VpnType.IKEV2 -> Unit
+    }
+}
+
+/** بخش «پروتکل‌ها»: دو لیست (دستی و ساب‌لینک)، اتصال دایره‌ای و لاگ یکجا. */
 @Composable
 fun ProtocolScreen() {
     val context = LocalContext.current
     val config = LocalConfiguration.current
-    AppLogger.init(context)
-    val clipboard = LocalClipboardManager.current
-    var showLog by rememberSaveable { mutableStateOf(false) }
     val landscape = config.screenWidthDp > config.screenHeightDp
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
     val ikev2Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    AppLogger.init(context)
 
-    var section by rememberSaveable { mutableStateOf(0) }
-    var ikev2List by remember { mutableStateOf(Ikev2Store.load(context)) }
-    var l2tpList by remember { mutableStateOf(ProtocolStore.loadL2tp(context)) }
-    var ocList by remember { mutableStateOf(ProtocolStore.loadOc(context)) }
-    var selIkev2 by rememberSaveable { mutableStateOf(Ikev2Store.selected(context)) }
-    var selL2tp by rememberSaveable { mutableStateOf(ProtocolStore.selectedL2tp(context)) }
-    var selOc by rememberSaveable { mutableStateOf(ProtocolStore.selectedOc(context)) }
+    var listTab by rememberSaveable { mutableStateOf(1) } // 0 = ساب‌لینک، 1 = دستی
+    var manualList by remember { mutableStateOf(ProtoLists.manual(context)) }
+    var subList by remember { mutableStateOf(ProtoLists.loadSub(context)) }
+    var favMan by remember { mutableStateOf(ProtoLists.favManKeys(context)) }
+    var favSub by remember { mutableStateOf(ProtoLists.favSub(context)) }
+    var selectedKey by rememberSaveable { mutableStateOf(ProtoLists.selected(context)) }
     var pendingKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var connected by remember { mutableStateOf(false) }
-    var note by rememberSaveable { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var showLog by rememberSaveable { mutableStateOf(false) }
+    var showChooser by rememberSaveable { mutableStateOf(false) }
     var dialogOpen by rememberSaveable { mutableStateOf(false) }
-    var editKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var dialogType by rememberSaveable { mutableStateOf(VpnType.IKEV2) }
+    var editing by remember { mutableStateOf<ProtoServer?>(null) }
+    var updating by remember { mutableStateOf(false) }
 
+    // ───── وضعیت واقعی هر پروتکل ─────
+    var ikev2Connected by remember { mutableStateOf(false) }
     DisposableEffect(ikev2Supported) {
         if (!ikev2Supported) {
             onDispose { }
         } else {
-            val cb = watchVpn(context) { connected = it }
+            val cb = watchVpn(context) { ikev2Connected = it }
             onDispose { unwatchVpn(context, cb) }
         }
     }
+    val l2tpState by TunnelVpnService.state.collectAsState()
+    val ocState by OcVpnService.state.collectAsState()
+    val l2tpConnected = l2tpState.first == TunnelVpnService.STATE_CONNECTED
+    val l2tpBusy = l2tpState.first == TunnelVpnService.STATE_CONNECTING
+    val ocConnected = ocState.first == OcVpnService.STATE_CONNECTED
+    val ocBusy = ocState.first == OcVpnService.STATE_CONNECTING
+    val connectedAny = ikev2Connected || l2tpConnected || ocConnected
+    val busyAny = l2tpBusy || ocBusy
+    val anyActive = connectedAny || busyAny
 
-    val consentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { res ->
-        val s = ikev2List.firstOrNull { it.key == pendingKey }
-        note = if (res.resultCode == Activity.RESULT_OK) {
-            startIkev2(context, s) ?: ""
+    // پیام‌های موقت (مثل «قطع شد») با تغییر واقعی وضعیت پاک می‌شوند
+    LaunchedEffect(ikev2Connected, l2tpState.first, ocState.first) { note = "" }
+
+    fun findServer(key: String?): ProtoServer? =
+        (manualList + subList + favSub).firstOrNull { it.key == key }
+
+    fun reloadManual() {
+        manualList = ProtoLists.manual(context)
+        favMan = ProtoLists.favManKeys(context)
+    }
+
+    fun setSelected(key: String?) {
+        selectedKey = key
+        ProtoLists.setSelected(context, key)
+    }
+
+    val ikev2Launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val s = findServer(pendingKey)
+        note = if (res.resultCode == Activity.RESULT_OK && s != null) {
+            startIkev2(context, s.toIkev2()) ?: ""
         } else {
             "اجازهٔ VPN داده نشد"
         }
     }
-
-    val l2tpState by TunnelVpnService.state.collectAsState()
-    var pendingL2tp by rememberSaveable { mutableStateOf<String?>(null) }
-    val l2tpConsentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { res ->
-        val entry = l2tpList.firstOrNull { it.key == pendingL2tp }
-        if (res.resultCode == Activity.RESULT_OK && entry != null) {
-            startL2tp(context, entry)
-            note = ""
+    val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val s = findServer(pendingKey)
+        if (res.resultCode == Activity.RESULT_OK && s != null) {
+            startServer(context, s)
         } else {
             note = "اجازهٔ VPN داده نشد"
         }
     }
-    val l2tpConnected = l2tpState.first == TunnelVpnService.STATE_CONNECTED
-    val ocState by OcVpnService.state.collectAsState()
-    var pendingOc by rememberSaveable { mutableStateOf<String?>(null) }
-    val ocConsentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { res ->
-        val entry = ocList.firstOrNull { it.key == pendingOc }
-        if (res.resultCode == Activity.RESULT_OK && entry != null) {
-            startOc(context, entry)
-            note = ""
+
+    fun connectSelected() {
+        val s = findServer(selectedKey)
+        if (s == null) {
+            note = "ابتدا یک سرور انتخاب کنید"
+            return
+        }
+        pendingKey = s.key
+        if (s.type == VpnType.IKEV2) {
+            if (!ikev2Supported) {
+                note = "IKEv2 فقط روی اندروید ۱۲ به بالا کار می‌کند"
+                return
+            }
+            var failure: String? = null
+            val intent = try {
+                ikev2ConsentIntent(context, s.toIkev2())
+            } catch (e: Exception) {
+                failure = e.message ?: "خطای ناشناخته"
+                null
+            }
+            when {
+                failure != null -> note = "پروفایل ساخته نشد: $failure"
+                intent != null -> ikev2Launcher.launch(intent)
+                else -> note = startIkev2(context, s.toIkev2()) ?: ""
+            }
         } else {
-            note = "اجازهٔ VPN داده نشد"
-        }
-    }
-    val ocConnected = ocState.first == OcVpnService.STATE_CONNECTED
-    val ocBusy = ocState.first == OcVpnService.STATE_CONNECTING
-    val l2tpBusy = l2tpState.first == TunnelVpnService.STATE_CONNECTING
-
-    val color = SECTION_COLORS[section]
-    val isIkev2 = section == 0
-
-    val onCircle: () -> Unit = {
-        when (section) {
-            0 -> {
-                if (!ikev2Supported) {
-                    note = "IKEv2 فقط روی اندروید ۱۲ به بالا کار می‌کند"
-                } else if (connected) {
-                    stopIkev2(context)
-                    note = "قطع شد"
-                } else {
-                    val s = ikev2List.firstOrNull { it.key == selIkev2 }
-                    if (s == null) {
-                        note = "ابتدا یک سرور انتخاب کنید"
-                    } else {
-                        pendingKey = s.key
-                        var failure: String? = null
-                        val intent = try {
-                            ikev2ConsentIntent(context, s)
-                        } catch (e: Exception) {
-                            failure = e.message ?: "خطای ناشناخته"
-                            null
-                        }
-                        when {
-                            failure != null -> note = "پروفایل ساخته نشد: $failure"
-                            intent != null -> consentLauncher.launch(intent)
-                            else -> note = startIkev2(context, s) ?: ""
-                        }
-                    }
-                }
-            }
-            1 -> {
-                if (l2tpConnected || l2tpBusy) {
-                    context.startService(TunnelVpnService.disconnectIntent(context))
-                    note = "قطع شد"
-                } else {
-                    val entry = l2tpList.firstOrNull { it.key == selL2tp }
-                    if (entry == null) {
-                        note = "ابتدا یک سرور L2TP انتخاب کنید"
-                    } else {
-                        pendingL2tp = entry.key
-                        val consent = VpnService.prepare(context)
-                        if (consent != null) l2tpConsentLauncher.launch(consent) else startL2tp(context, entry)
-                    }
-                }
-            }
-            2 -> {
-                if (ocConnected || ocBusy) {
-                    context.startService(OcVpnService.disconnectIntent(context))
-                    note = "قطع شد"
-                } else {
-                    val entry = ocList.firstOrNull { it.key == selOc }
-                    if (entry == null) {
-                        note = "ابتدا یک سرور OpenConnect انتخاب کنید"
-                    } else {
-                        pendingOc = entry.key
-                        val consent = VpnService.prepare(context)
-                        if (consent != null) ocConsentLauncher.launch(consent) else startOc(context, entry)
-                    }
-                }
-            }
-            else -> note = "اتصال ${SECTION_TITLES[section]} هنوز در این نسخه فعال نیست؛ سرور را ذخیره کنید"
+            val consent = VpnService.prepare(context)
+            if (consent != null) vpnLauncher.launch(consent) else startServer(context, s)
         }
     }
 
-    val circleLabel = when (section) {
-        0 -> if (connected) "قطع" else "اتصال"
-        1 -> if (l2tpConnected || l2tpBusy) "قطع" else "اتصال"
-        2 -> if (ocConnected || ocBusy) "قطع" else "اتصال"
-        else -> "—"
+    fun disconnectAll() {
+        if (ikev2Connected) stopIkev2(context)
+        if (l2tpConnected || l2tpBusy) context.startService(TunnelVpnService.disconnectIntent(context))
+        if (ocConnected || ocBusy) context.startService(OcVpnService.disconnectIntent(context))
     }
 
-    val statusText = when (section) {
-        0 -> when {
-            connected -> "متصل · ${ikev2List.firstOrNull { it.key == selIkev2 }?.label ?: ""}"
-            else -> "قطع"
-        }
-        1 -> when {
-            l2tpConnected -> "متصل · ${l2tpList.firstOrNull { it.key == selL2tp }?.label ?: ""}"
-            l2tpBusy -> "در حال اتصال…"
-            l2tpState.first == TunnelVpnService.STATE_FAILED -> "خطا در اتصال"
-            else -> "قطع"
-        }
-        2 -> when {
-            ocConnected -> "متصل · ${ocList.firstOrNull { it.key == selOc }?.label ?: ""}"
-            ocBusy -> "در حال اتصال…"
-            ocState.first == OcVpnService.STATE_FAILED -> "خطا در اتصال"
-            else -> "قطع"
-        }
-        else -> "${SECTION_TITLES[section]} · آماده‌ی ذخیره"
-    }
-
-    // ───── بخش‌های بالا: دایره، وضعیت، نکته ─────
-    val errorDetail: String? = when (section) {
-        1 -> if (l2tpState.first == TunnelVpnService.STATE_FAILED) l2tpState.second else null
-        2 -> if (ocState.first == OcVpnService.STATE_FAILED) ocState.second else null
+    // ───── کارت خطا: خلاصه‌ی کوتاه؛ جزئیات در پنجرهٔ لاگ ─────
+    val errorDetail: String? = when {
+        l2tpState.first == TunnelVpnService.STATE_FAILED -> "L2TP: ${l2tpState.second}"
+        ocState.first == OcVpnService.STATE_FAILED -> "OpenConnect: ${ocState.second}"
         else -> null
+    }
+
+    val statusText = when {
+        ikev2Connected -> "متصل · IKEv2"
+        l2tpConnected -> "متصل · L2TP/IPsec"
+        ocConnected -> "متصل · OpenConnect"
+        l2tpBusy -> "در حال اتصال… · L2TP/IPsec"
+        ocBusy -> "در حال اتصال… · OpenConnect"
+        else -> "قطع"
+    }
+    val accent = when {
+        connectedAny -> Green
+        busyAny -> Cyan
+        else -> Violet
     }
 
     val header: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .size(if (landscape) 96.dp else 118.dp)
-                .background(Brush.radialGradient(listOf(color.copy(alpha = 0.95f), color.copy(alpha = 0.3f))), CircleShape)
-                .clickable { onCircle() },
+                .background(Brush.radialGradient(listOf(accent.copy(alpha = 0.95f), accent.copy(alpha = 0.3f))), CircleShape)
+                .clickable { if (anyActive) disconnectAll() else connectSelected() },
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                circleLabel,
+                if (anyActive) "قطع" else "اتصال",
                 color = Color.White,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
             )
         }
-        Text(statusText, color = PTextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            statusText,
+            color = if (connectedAny) Green else PTextMain,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (note.isNotBlank()) Text(note, color = PTextSub, fontSize = 11.sp, textAlign = TextAlign.Center)
-        if (!errorDetail.isNullOrBlank()) {
-            ErrorBlock(
-                detail = errorDetail,
-                onCopy = { clipboard.setText(AnnotatedString(errorDetail)) },
-                onFullLog = { showLog = true },
+        if (errorDetail != null) {
+            ErrorCard(
+                summary = errorDetail.lineSequence().firstOrNull().orEmpty().take(160),
+                onDetails = { showLog = true },
                 onDismiss = {
-                    if (section == 1) TunnelVpnService.dismissError() else OcVpnService.dismissError()
+                    TunnelVpnService.dismissError()
+                    OcVpnService.dismissError()
                 },
             )
         }
     }
 
-    // ───── نوارِ بخش‌ها ─────
+    // ───── دو لیست: ساب‌لینک (راست) و دستی (چپ) ─────
     val tabs: @Composable () -> Unit = {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SECTION_TITLES.forEachIndexed { idx, title ->
-                val on = section == idx
-                val c = SECTION_COLORS[idx]
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0 to "سرورهای ساب‌لینک (${subList.size})", 1 to "سرورهای دستی (${manualList.size})").forEach { (idx, title) ->
+                val on = listTab == idx
                 Box(
                     Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (on) Brush.linearGradient(listOf(c, c.copy(alpha = 0.6f))) else Brush.linearGradient(listOf(Surface1, Surface1)))
-                        .border(1.dp, c.copy(alpha = if (on) 0f else 0.6f), RoundedCornerShape(12.dp))
-                        .clickable { section = idx; note = "" }
-                        .padding(vertical = 9.dp, horizontal = 4.dp),
+                        .background(if (on) Violet else Surface1)
+                        .border(1.dp, if (on) Violet else Violet.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                        .clickable { listTab = idx }
+                        .padding(vertical = 10.dp, horizontal = 6.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         title,
-                        color = if (on) Color.White else c,
-                        fontSize = 11.sp,
-                        fontWeight = if (on) FontWeight.Bold else FontWeight.SemiBold,
+                        color = if (on) Color.White else PTextMain,
+                        fontSize = 12.sp,
+                        fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
-                        maxLines = 2,
+                        maxLines = 1,
                     )
                 }
             }
         }
     }
 
-    // ───── فهرست بر اساس بخش ─────
-    val list: @Composable (androidx.compose.ui.Modifier) -> Unit = { mod ->
+    val list: @Composable (Modifier) -> Unit = { mod ->
         Column(mod.fillMaxWidth().background(Surface1, RoundedCornerShape(16.dp)).padding(6.dp)) {
-            when (section) {
-                0 -> ServerRows(
-                    rows = ikev2List.map { Triple(it.key, it.label, it.server) },
-                    selected = selIkev2,
-                    color = color,
-                    onSelect = { selIkev2 = it; Ikev2Store.setSelected(context, it) },
-                    onEdit = { editKey = it; dialogOpen = true },
-                    onDelete = { k ->
-                        val rest = ikev2List.filter { it.key != k }
-                        Ikev2Store.save(context, rest)
-                        ikev2List = rest
-                        if (selIkev2 == k) { selIkev2 = null; Ikev2Store.setSelected(context, null) }
+            if (listTab == 0) {
+                val favKeys = favSub.map { it.key }.toSet()
+                val rows = favSub + subList.filter { it.key !in favKeys }
+                ServerList(
+                    rows = rows,
+                    emptyText = if (ProtoLists.SUB_URLS.isEmpty()) "لینک ساب‌لینک این بخش هنوز تنظیم نشده است" else "سروری از ساب‌لینک نیست؛ بروزرسانی کنید",
+                    selectedKey = selectedKey,
+                    isFav = { it.key in favKeys },
+                    onSelect = { setSelected(it.key) },
+                    onFav = {
+                        ProtoLists.toggleSubFav(context, it)
+                        favSub = ProtoLists.favSub(context)
                     },
-                    emptyText = "سرور IKEv2 ندارید؛ با «افزودن» اضافه کنید",
+                    onEdit = null,
+                    onDelete = null,
                 )
-                1 -> ServerRows(
-                    rows = l2tpList.map { Triple(it.key, it.label, it.server) },
-                    selected = selL2tp,
-                    color = color,
-                    onSelect = { selL2tp = it; ProtocolStore.setSelectedL2tp(context, it) },
-                    onEdit = { editKey = it; dialogOpen = true },
-                    onDelete = { k ->
-                        val rest = l2tpList.filter { it.key != k }
-                        ProtocolStore.saveL2tp(context, rest)
-                        l2tpList = rest
-                        if (selL2tp == k) { selL2tp = null; ProtocolStore.setSelectedL2tp(context, null) }
+            } else {
+                val favKeys = favMan.toSet()
+                val rows = manualList.sortedBy { if (it.key in favKeys) 0 else 1 }
+                ServerList(
+                    rows = rows,
+                    emptyText = "سرور دستی ندارید؛ با دکمهٔ «افزودن سرور دستی» اضافه کنید",
+                    selectedKey = selectedKey,
+                    isFav = { it.key in favKeys },
+                    onSelect = { setSelected(it.key) },
+                    onFav = {
+                        ProtoLists.toggleManFav(context, it.key)
+                        favMan = ProtoLists.favManKeys(context)
                     },
-                    emptyText = "سرور L2TP/IPsec ندارید؛ با «افزودن» اضافه کنید",
-                )
-                2 -> ServerRows(
-                    rows = ocList.map { Triple(it.key, it.label, "${it.server}:${it.port} · AnyConnect") },
-                    selected = selOc,
-                    color = color,
-                    onSelect = { selOc = it; ProtocolStore.setSelectedOc(context, it) },
-                    onEdit = { editKey = it; dialogOpen = true },
-                    onDelete = { k ->
-                        val rest = ocList.filter { it.key != k }
-                        ProtocolStore.saveOc(context, rest)
-                        ocList = rest
-                        if (selOc == k) { selOc = null; ProtocolStore.setSelectedOc(context, null) }
+                    onEdit = { editing = it; dialogType = it.type; dialogOpen = true },
+                    onDelete = {
+                        ProtoLists.deleteManual(context, it)
+                        if (selectedKey == it.key) setSelected(null)
+                        reloadManual()
                     },
-                    emptyText = "سرور OpenConnect (AnyConnect) ندارید؛ با «افزودن» اضافه کنید",
                 )
-                else -> Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        "لیست سرورهای ساب‌لینک به‌زودی اضافه می‌شود",
-                        color = PTextSub,
-                        fontSize = 13.sp,
-                        textAlign = TextAlign.Center,
-                    )
-                }
             }
         }
     }
 
-    val addRow: @Composable () -> Unit = {
-        if (section != 3) {
+    val actions: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
-                onClick = { editKey = null; dialogOpen = true },
-                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    updating = true
+                    note = ProtoLists.refreshSub(context)
+                    subList = ProtoLists.loadSub(context)
+                    favSub = ProtoLists.favSub(context)
+                    updating = false
+                },
+                enabled = !updating,
+                modifier = Modifier.weight(1f),
             ) {
-                Text("افزودن سرور ${SECTION_TITLES[section]}", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("بروزرسانی", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
+            OutlinedButton(
+                onClick = { showChooser = true },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("افزودن سرور دستی", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+        }
+        OutlinedButton(onClick = { showLog = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("لاگ برنامه", color = PTextMain, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 
@@ -415,13 +426,11 @@ fun ProtocolScreen() {
                 Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                header()
-                addRow()
-            }
+            ) { header() }
             Column(Modifier.weight(1.2f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 tabs()
                 list(Modifier.weight(1f))
+                actions()
             }
         }
     } else {
@@ -433,7 +442,7 @@ fun ProtocolScreen() {
             header()
             tabs()
             list(Modifier.weight(1f))
-            addRow()
+            actions()
         }
     }
 
@@ -443,122 +452,194 @@ fun ProtocolScreen() {
             onDismiss = { showLog = false },
             onCopy = { clipboard.setText(AnnotatedString(AppLogger.read())) },
             onShare = {
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(Intent.EXTRA_TEXT, AppLogger.read())
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, AppLogger.read())
                 context.startActivity(Intent.createChooser(send, "ارسال لاگ"))
             },
             onClear = { AppLogger.clear() },
         )
     }
 
-    if (dialogOpen) {
-        val fields = when (section) {
-            0 -> IKEV2_FIELDS
-            1 -> L2TP_FIELDS
-            else -> OC_FIELDS
-        }
-        val initial: Map<String, String> = when {
-            editKey == null -> if (section == 2) mapOf("port" to "443") else emptyMap()
-            section == 0 -> ikev2List.firstOrNull { it.key == editKey }?.let {
-                mapOf("name" to it.name, "server" to it.server, "username" to it.username, "password" to it.password, "remoteId" to it.remoteId, "psk" to it.psk)
-            } ?: emptyMap()
-            section == 1 -> l2tpList.firstOrNull { it.key == editKey }?.let {
-                mapOf("name" to it.name, "server" to it.server, "psk" to it.psk, "username" to it.username, "password" to it.password)
-            } ?: emptyMap()
-            else -> ocList.firstOrNull { it.key == editKey }?.let {
-                mapOf("name" to it.name, "server" to it.server, "port" to it.port.toString(), "username" to it.username, "password" to it.password, "authGroup" to it.authGroup, "certPin" to it.certPin)
-            } ?: emptyMap()
-        }
-        EntryDialog(
-            title = (if (editKey == null) "افزودن " else "ویرایش ") + SECTION_TITLES[section],
-            fields = fields,
-            initial = initial,
-            onDismiss = { dialogOpen = false },
-            onSave = { v ->
-                val server = v["server"].orEmpty().trim()
-                val user = v["username"].orEmpty().trim()
-                when (section) {
-                    0 -> {
-                        val item = Ikev2Server(v["name"].orEmpty().trim(), server, user, v["password"].orEmpty(), v["remoteId"].orEmpty().trim(), v["psk"].orEmpty())
-                        val rest = ikev2List.filter { it.key != editKey && it.key != item.key } + item
-                        Ikev2Store.save(context, rest)
-                        ikev2List = rest
-                        selIkev2 = item.key
-                        Ikev2Store.setSelected(context, item.key)
-                    }
-                    1 -> {
-                        val item = L2tpEntry(v["name"].orEmpty().trim(), server, v["psk"].orEmpty(), user, v["password"].orEmpty())
-                        val rest = l2tpList.filter { it.key != editKey && it.key != item.key } + item
-                        ProtocolStore.saveL2tp(context, rest)
-                        l2tpList = rest
-                        selL2tp = item.key
-                        ProtocolStore.setSelectedL2tp(context, item.key)
-                    }
-                    else -> {
-                        val port = v["port"].orEmpty().toIntOrNull() ?: 443
-                        val item = OcEntry(v["name"].orEmpty().trim(), server, port, user, v["password"].orEmpty(), v["authGroup"].orEmpty().trim(), v["certPin"].orEmpty().trim())
-                        val rest = ocList.filter { it.key != editKey && it.key != item.key } + item
-                        ProtocolStore.saveOc(context, rest)
-                        ocList = rest
-                        selOc = item.key
-                        ProtocolStore.setSelectedOc(context, item.key)
+    if (showChooser) {
+        AlertDialog(
+            onDismissRequest = { showChooser = false },
+            containerColor = Surface1,
+            title = { Text("نوع سرور", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VpnType.values().forEach { t ->
+                        OutlinedButton(
+                            onClick = {
+                                showChooser = false
+                                editing = null
+                                dialogType = t
+                                dialogOpen = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(t.label, color = typeColor(t), fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
-                dialogOpen = false
-                null
+            },
+            confirmButton = { TextButton(onClick = { showChooser = false }) { Text("انصراف") } },
+        )
+    }
+
+    if (dialogOpen) {
+        EntryDialog(
+            title = (if (editing == null) "افزودن " else "ویرایش ") + dialogType.label,
+            fields = fieldsFor(dialogType),
+            initial = initialFor(editing, dialogType),
+            onDismiss = { dialogOpen = false },
+            onSave = { v ->
+                val port = if (dialogType == VpnType.OPENCONNECT) v["port"].orEmpty().toIntOrNull() ?: 443 else 0
+                if (dialogType == VpnType.OPENCONNECT && v["port"].orEmpty().toIntOrNull() == null) {
+                    "پورت باید عدد باشد"
+                } else {
+                    val item = ProtoServer(
+                        type = dialogType,
+                        name = v["name"].orEmpty().trim(),
+                        host = v["server"].orEmpty().trim(),
+                        port = port,
+                        user = v["username"].orEmpty().trim(),
+                        password = v["password"].orEmpty(),
+                        psk = v["psk"].orEmpty(),
+                        remoteId = v["remoteId"].orEmpty().trim(),
+                        authGroup = v["authGroup"].orEmpty().trim(),
+                        certPin = v["certPin"].orEmpty().trim(),
+                        rawKey = "",
+                    )
+                    ProtoLists.saveManual(context, item, editing?.rawKey)
+                    reloadManual()
+                    setSelected(item.key)
+                    listTab = 1
+                    editing = null
+                    dialogOpen = false
+                    null
+                }
             },
         )
     }
 }
 
+/** فهرست یک بخش: قلب، نام، نوع پروتکل؛ و در بخش دستی ویرایش و حذف. */
 @Composable
-private fun ServerRows(
-    rows: List<Triple<String, String, String>>,
-    selected: String?,
-    color: Color,
-    onSelect: (String) -> Unit,
-    onEdit: (String) -> Unit,
-    onDelete: (String) -> Unit,
+private fun ServerList(
+    rows: List<ProtoServer>,
     emptyText: String,
+    selectedKey: String?,
+    isFav: (ProtoServer) -> Boolean,
+    onSelect: (ProtoServer) -> Unit,
+    onFav: (ProtoServer) -> Unit,
+    onEdit: ((ProtoServer) -> Unit)?,
+    onDelete: ((ProtoServer) -> Unit)?,
 ) {
     if (rows.isEmpty()) {
-        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
             Text(emptyText, color = PTextSub, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
         return
     }
     LazyColumn(Modifier.fillMaxSize()) {
-        items(rows, key = { it.first }) { (key, label, sub) ->
-            val isSel = key == selected
+        items(rows, key = { it.key }) { s ->
+            val isSel = s.key == selectedKey
+            val c = typeColor(s.type)
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(if (isSel) color.copy(alpha = 0.18f) else Color.Transparent)
-                    .border(1.dp, if (isSel) color else color.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                    .clickable { onSelect(key) }
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                    .background(if (isSel) c.copy(alpha = 0.18f) else Color.Transparent)
+                    .border(1.dp, if (isSel) c else c.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                    .clickable { onSelect(s) }
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(8.dp).background(color, CircleShape))
-                Spacer(Modifier.size(8.dp))
+                Icon(
+                    imageVector = if (isFav(s)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = "قلب",
+                    tint = if (isFav(s)) Color(0xFFFF5C7A) else PTextSub,
+                    modifier = Modifier.size(18.dp).clickable { onFav(s) },
+                )
+                Spacer8()
                 Column(Modifier.weight(1f)) {
                     Text(
-                        label,
+                        s.label,
                         color = PTextMain,
                         fontSize = 13.sp,
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(sub, color = color, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "${s.type.label} · ${s.host}${if (s.type == VpnType.OPENCONNECT) ":${s.port}" else ""}",
+                        color = c,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                TextButton(onClick = { onEdit(key) }) { Text("ویرایش", color = color, fontSize = 12.sp) }
-                TextButton(onClick = { onDelete(key) }) { Text("حذف", color = PDanger, fontSize = 12.sp) }
+                if (onEdit != null) TextButton(onClick = { onEdit(s) }) { Text("ویرایش", color = c, fontSize = 12.sp) }
+                if (onDelete != null) TextButton(onClick = { onDelete(s) }) { Text("حذف", color = PDanger, fontSize = 12.sp) }
             }
         }
     }
+}
+
+@Composable
+private fun Spacer8() {
+    Box(Modifier.size(8.dp))
+}
+
+/** کارت خطای کوتاه: جزئیات کامل در پنجرهٔ لاگ است. */
+@Composable
+private fun ErrorCard(summary: String, onDetails: () -> Unit, onDismiss: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x33FF6B6B))
+            .border(1.dp, PDanger, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(summary, color = PTextMain, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = onDetails, modifier = Modifier.weight(1f)) { Text("جزئیات و لاگ", fontSize = 11.sp) }
+            OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("بستن", fontSize = 11.sp, color = PDanger) }
+        }
+    }
+}
+
+/** پنجرهٔ لاگ کامل برنامه با کپی، ارسال و پاک‌کردن. */
+@Composable
+private fun LogDialog(
+    text: String,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onClear: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Surface1,
+        title = { Text("لاگ برنامه", fontWeight = FontWeight.Bold) },
+        text = {
+            SelectionContainer {
+                Column(Modifier.fillMaxWidth().height(380.dp).verticalScroll(rememberScrollState())) {
+                    Text(text.ifBlank { "لاگی ثبت نشده است" }, color = PTextMain, fontSize = 10.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onCopy) { Text("کپی") }
+                TextButton(onClick = onShare) { Text("ارسال") }
+                TextButton(onClick = onClear) { Text("پاک‌کردن", color = PDanger) }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("بستن") } },
+    )
 }
 
 @Composable
@@ -602,89 +683,6 @@ private fun EntryDialog(
                 if (err != null) error = err
             }) { Text("ذخیره") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("انصراف") }
-        },
-    )
-}
-
-/** شروع L2TP: اول VPNهای دیگر قطع می‌شوند، بعد سرویس با پارامترهای سرور روشن می‌شود. */
-private fun startL2tp(context: Context, e: L2tpEntry) {
-    stopOthersForIkev2(context)
-    stopIkev2IfActive(context)
-    ProtocolStore.setSelectedL2tp(context, e.key)
-    context.startService(TunnelVpnService.connectIntent(context, e.server, e.username, e.password, e.psk))
-}
-
-/** شروع OpenConnect: اول VPNهای دیگر قطع می‌شوند، بعد سرویس AnyConnect روشن می‌شود. */
-private fun startOc(context: Context, e: OcEntry) {
-    stopOthersForIkev2(context)
-    stopIkev2IfActive(context)
-    ProtocolStore.setSelectedOc(context, e.key)
-    context.startService(
-        OcVpnService.connectIntent(
-            context,
-            OcParams(e.server, e.port, e.username, e.password, e.authGroup, e.certPin),
-        ),
-    )
-}
-
-/** کارت خطا: متن کامل قابل انتخاب، با دکمه‌های کپی، لاگ کامل و بستن. */
-@Composable
-private fun ErrorBlock(detail: String, onCopy: () -> Unit, onFullLog: () -> Unit, onDismiss: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0x33FF6B6B))
-            .border(1.dp, PDanger, RoundedCornerShape(12.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        SelectionContainer {
-            Text(detail, color = PTextMain, fontSize = 11.sp, textAlign = TextAlign.Start)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedButton(onClick = onCopy, modifier = Modifier.weight(1f)) { Text("کپی خطا", fontSize = 11.sp) }
-            OutlinedButton(onClick = onFullLog, modifier = Modifier.weight(1f)) { Text("لاگ کامل", fontSize = 11.sp) }
-            OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("بستن", fontSize = 11.sp, color = PDanger) }
-        }
-    }
-}
-
-/** نمایش لاگ کامل برنامه با کپی، ارسال و پاک‌کردن. */
-@Composable
-private fun LogDialog(
-    text: String,
-    onDismiss: () -> Unit,
-    onCopy: () -> Unit,
-    onShare: () -> Unit,
-    onClear: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Surface1,
-        title = { Text("لاگ برنامه", fontWeight = FontWeight.Bold) },
-        text = {
-            SelectionContainer {
-                Column(Modifier.fillMaxWidth().height(380.dp).verticalScroll(rememberScrollState())) {
-                    Text(
-                        text.ifBlank { "لاگی ثبت نشده است" },
-                        color = PTextMain,
-                        fontSize = 10.sp,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onCopy) { Text("کپی") }
-                TextButton(onClick = onShare) { Text("ارسال") }
-                TextButton(onClick = onClear) { Text("پاک‌کردن", color = PDanger) }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("بستن") }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } },
     )
 }
