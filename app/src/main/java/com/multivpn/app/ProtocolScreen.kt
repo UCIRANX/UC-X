@@ -132,6 +132,9 @@ private fun startServer(context: Context, s: ProtoServer) {
     stopOthersForIkev2(context)
     stopIkev2IfActive(context)
     AppLogger.init(context)
+    // خطای قدیمی پروتکل‌های دیگر را پاک می‌کنیم تا با اتصال جدید اشتباه نشان داده نشود
+    TunnelVpnService.dismissError()
+    OcVpnService.dismissError()
     when (s.type) {
         VpnType.L2TP -> {
             AppLogger.log("UI", "شروع L2TP به ${s.host}")
@@ -263,7 +266,8 @@ fun ProtocolScreen() {
     }
 
     // ───── کارت خطا: خلاصه‌ی کوتاه؛ جزئیات در پنجرهٔ لاگ ─────
-    val errorDetail: String? = when {
+    // خطای قدیمی یک پروتکل وقتی اتصالی فعال است نشان داده نمی‌شود
+    val errorDetail: String? = if (anyActive) null else when {
         l2tpState.first == TunnelVpnService.STATE_FAILED -> "L2TP: ${l2tpState.second}"
         ocState.first == OcVpnService.STATE_FAILED -> "OpenConnect: ${ocState.second}"
         else -> null
