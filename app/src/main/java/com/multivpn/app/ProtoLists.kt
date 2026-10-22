@@ -2,6 +2,16 @@ package com.multivpn.app
 
 import android.content.Context
 import androidx.preference.PreferenceManager
+import androidx.work.BackoffPolicy
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ListenableWorker
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import com.multivpn.app.sub.DohClient
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -144,10 +154,35 @@ object ProtoLists {
         prefs(ctx).edit().putString(K_SUB, writeServers(list)).apply()
     }
 
-    /** بروزرسانی ساب‌لینک‌های این بخش؛ پیام نتیجه را برمی‌گرداند. */
-    fun refreshSub(ctx: Context): String {
+    /**
+     * بروزرسانی ساب‌لینک‌های این بخش؛ پیام نتیجه را برمی‌گرداند.
+     * اول از VPN فعال (سینگ‌باکس/گارد/تور) رد می‌شود؛ اگر خطا داد، مستقیم.
+     */
+    suspend fun refreshSub(ctx: Context): String {
         if (SUB_URLS.isEmpty()) return "لینک ساب‌لینک این بخش هنوز تنظیم نشده است"
+        val tunnel = SubRefresh.tunnelProxy(ctx)
+        var text: String? = null
+        if (tunnel != null) text = withTimeoutOrNull(20_000L) { fetchAllText(tunnel) }
+        if (text == null) text = fetchAllText(null)
+        if (text == null) return "دریافت ساب‌لینک ناموفق بود"
+        // فرمت سرورهای این بخش هنوز مشخص نیست؛ تا تعریف شدن، چیزی ذخیره نمی‌شود
         return "فرمت ساب‌لینک این بخش هنوز تعریف نشده است"
+    }
+
+    private suspend fun fetchAllText(proxy: java.net.Proxy?): String? {
+        val sb = StringBuilder()
+        for (u in SUB_URLS) {
+            runCatching { sb.append(DohClient.fetchUrlText(u, proxy)).append('\n') }
+        }
+        return if (sb.isBlank()) null else sb.toString()
+    }
+
+    /** بروزرسانی خودکار هر ۲۴ ساعت. */
+    fun schedule(ctx: Context) {
+        val request = PeriodicWorkRequestBuilder<ProtoSubWorker>(24, TimeUnit.HOURS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+            .build()
+        WorkManager.getInstance(ctx).enqueueUniquePeriodicWork("proto-sub-24h", ExistingPeriodicWorkPolicy.KEEP, request)
     }
 
     // ───── انتخاب ─────
@@ -197,4 +232,13 @@ object ProtoLists {
             )
         }
     }.getOrDefault(emptyList())
+}
+
+class ProtoSubWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): ListenableWorker.Result = try {
+        ProtoLists.refreshSub(applicationContext)
+        ListenableWorker.Result.success()
+    } catch (_: Exception) {
+        ListenableWorker.Result.retry()
+    }
 }

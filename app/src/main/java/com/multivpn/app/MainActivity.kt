@@ -99,7 +99,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleOpenIntent(i: Intent?) {
-        if (i?.getStringExtra("open_mode") == "SSTP") ModeRequest.requested = "SSTP"
+        val m = i?.getStringExtra("open_mode")
+        if (m == "SSTP" || m == "PROTO") ModeRequest.requested = m
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
         initGuard()
         SubUpdate.schedule(applicationContext)
         SstpSub.schedule(applicationContext)
+        ProtoLists.schedule(applicationContext)
         ContextCompat.registerReceiver(
             this, vpnReceiver, IntentFilter(FullVpnService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED
         )

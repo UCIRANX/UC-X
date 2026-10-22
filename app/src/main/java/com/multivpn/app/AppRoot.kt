@@ -64,6 +64,12 @@ private val TextSub = Color(0xFFB4B4C8)
 private fun initialMode(ctx: Context): AppMode {
     if (SingBoxController.connected || SingBoxController.connecting) return AppMode.VPN
     if (isSstpActive(ctx)) return AppMode.SSTP
+    val l2 = io.github.evokelektrique.tunnelforge.TunnelVpnService.state.value.first
+    val oc = com.multivpn.app.oc.OcVpnService.state.value.first
+    if (l2 == io.github.evokelektrique.tunnelforge.TunnelVpnService.STATE_CONNECTED ||
+        l2 == io.github.evokelektrique.tunnelforge.TunnelVpnService.STATE_CONNECTING ||
+        oc == com.multivpn.app.oc.OcVpnService.STATE_CONNECTED ||
+        oc == com.multivpn.app.oc.OcVpnService.STATE_CONNECTING) return AppMode.IKEV2
     if (TorController.state.value.phase != Phase.IDLE) return AppMode.TOR
     if (StateBus.state.value != VpnState.Idle) return AppMode.GUARD
     return AppMode.GUARD
@@ -104,6 +110,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
     // تور و Sing-Box هر دو VPN سراسری لازم دارند؛ وقتی تور شروع می‌شود Sing-Box قطع می‌شود
     LaunchedEffect(ModeRequest.requested) {
         if (ModeRequest.requested == "SSTP") mode = AppMode.SSTP
+        if (ModeRequest.requested == "PROTO") mode = AppMode.IKEV2
         ModeRequest.requested = null
     }
 

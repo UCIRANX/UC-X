@@ -94,10 +94,15 @@ static long long ppp_now_ms(void) {
  *
  * @return PPP payload length on success; -1 on cancel, timeout, socket error, or oversize payload.
  */
+/* 1 when the L2TP peer sent StopCCN/CDN during PPP: stop waiting immediately. */
+static int ppp_peer_closed = 0;
+
 static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
                     l2tp_session_t *l2tp, uint8_t *out, size_t cap, int ms) {
   struct timeval start;
   gettimeofday(&start, NULL);
+  if (ppp_peer_closed)
+    return -1;
   for (;;) {
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp recv canceled before poll");
@@ -176,6 +181,16 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, so
         uint16_t ctrl_mt = 0;
         if (l2tp_ctrl_msg_type(plain, plen, &ctrl_mt) != 0)
           ctrl_mt = 0; /* ZLB: بدون Message Type */
+        if (ctrl_mt == L2TP_MSG_STOPCCN || ctrl_mt == L2TP_MSG_CDN) {
+          uint16_t rc = 0, ec = 0;
+          char emsg[128] = "";
+          (void)l2tp_ctrl_result_details(plain, plen, &rc, &ec, emsg, sizeof(emsg));
+          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "L2TP server closed session mt=%u result=%u error=%u msg=%s",
+                            (unsigned)ctrl_mt, (unsigned)rc, (unsigned)ec, emsg);
+          (void)l2tp_ack_control_frame(esp_fd, esp, peer, peer_len, l2tp, plain, plen);
+          ppp_peer_closed = 1;
+          return -1;
+        }
         if (l2tp_ack_control_frame(esp_fd, esp, peer, peer_len, l2tp, plain, plen) != 0) {
           tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv control ack failed mt=%u flags=0x%04x plen=%zu",
                             (unsigned)ctrl_mt, (unsigned)flags, plen);
@@ -1353,6 +1368,7 @@ static size_t ppp_write_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, c
 
 int ppp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *l2tp,
                   const char *user, const char *password, int tun_mtu, ppp_session_t *ppp) {
+  ppp_peer_closed = 0;
   memset(ppp, 0, sizeof(*ppp));
   ppp->link_mtu = ppp_sanitize_link_mtu(tun_mtu);
   ppp->tcp_mss = ppp_tcp_mss_for_link_mtu(ppp->link_mtu);

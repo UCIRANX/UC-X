@@ -1,20 +1,18 @@
 package com.multivpn.app.oc
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.util.Log
-import androidx.core.app.NotificationCompat
+import com.multivpn.app.VpnNotify
+import com.multivpn.app.log.AppLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import com.multivpn.app.log.AppLogger
 import org.infradead.libopenconnect.LibOpenConnect
 
 /** پارامترهای اتصال AnyConnect. */
@@ -29,7 +27,7 @@ data class OcParams(
 
 /**
  * سرویس VPN برای OpenConnect (AnyConnect) بر پایهٔ libopenconnect.
- * الگو از OpenTunnel (LGPL-2.1)؛ نسخهٔ سادهٔ UC X: فقط تونل کامل و بدون UI اضافی.
+ * الگو از OpenTunnel (LGPL-2.1)؛ نسخهٔ UC X: تونل کامل، توقف موقت و نوتیفیکیشن با سرعت لحظه‌ای.
  */
 class OcVpnService : VpnService() {
 
@@ -37,6 +35,8 @@ class OcVpnService : VpnService() {
         private const val TAG = "OpenConnect"
         const val ACTION_CONNECT = "com.multivpn.app.oc.CONNECT"
         const val ACTION_DISCONNECT = "com.multivpn.app.oc.DISCONNECT"
+        const val ACTION_PAUSE = "com.multivpn.app.oc.PAUSE"
+        const val ACTION_RESUME = "com.multivpn.app.oc.RESUME"
         const val EXTRA_SERVER = "server"
         const val EXTRA_PORT = "port"
         const val EXTRA_USER = "user"
@@ -48,23 +48,26 @@ class OcVpnService : VpnService() {
         const val STATE_CONNECTING = "connecting"
         const val STATE_CONNECTED = "connected"
         const val STATE_FAILED = "failed"
+        const val STATE_PAUSED = "paused"
 
         private const val CHANNEL_ID = "oc_vpn"
         private const val NOTIFICATION_ID = 2201
+        private const val NOTIFICATION_PAUSED_ID = 2202
         private const val MTU = 1400
         private const val FALLBACK_DNS = "8.8.8.8"
+        private const val PREFS = "proto_last_oc"
 
         private val stateFlow = MutableStateFlow(STATE_IDLE to "")
         /** (وضعیت، توضیح) برای نمایش در UI. */
         val state: StateFlow<Pair<String, String>> = stateFlow.asStateFlow()
 
+        @Volatile
+        private var instance: OcVpnService? = null
+
         /** پاک کردن خطای نمایش‌داده‌شده (وضعیت FAILED → IDLE). */
         fun dismissError() {
             if (stateFlow.value.first == STATE_FAILED) stateFlow.value = STATE_IDLE to ""
         }
-
-        @Volatile
-        private var instance: OcVpnService? = null
 
         fun connectIntent(context: Context, p: OcParams): Intent =
             Intent(context, OcVpnService::class.java)
@@ -89,11 +92,17 @@ class OcVpnService : VpnService() {
     @Volatile
     private var tun: ParcelFileDescriptor? = null
 
+    @Volatile
+    private var speedThread: Thread? = null
+
+    @Volatile
+    private var serverLabel: String = ""
+
     override fun onCreate() {
         super.onCreate()
         AppLogger.init(applicationContext)
         instance = this
-        createChannel()
+        VpnNotify.channel(this, CHANNEL_ID, "OpenConnect")
     }
 
     override fun onDestroy() {
@@ -106,11 +115,16 @@ class OcVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_DISCONNECT -> {
+                clearPaused()
                 stopAll()
                 stopSelf()
             }
+            ACTION_PAUSE -> pauseNow()
+            ACTION_RESUME -> {
+                val p = loadLast()
+                if (p == null) fail("اتصال قبلی برای ادامه پیدا نشد") else startConnect(p)
+            }
             ACTION_CONNECT -> {
-                if (worker?.isAlive == true) return START_NOT_STICKY
                 val p = OcParams(
                     server = intent.getStringExtra(EXTRA_SERVER).orEmpty(),
                     port = intent.getIntExtra(EXTRA_PORT, 443),
@@ -119,17 +133,24 @@ class OcVpnService : VpnService() {
                     group = intent.getStringExtra(EXTRA_GROUP).orEmpty(),
                     pin = intent.getStringExtra(EXTRA_PIN).orEmpty(),
                 )
-                if (p.server.isBlank() || p.user.isBlank()) {
-                    stateFlow.value = STATE_FAILED to "سرور و نام کاربری الزامی است"
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-                runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…")) }
-                stateFlow.value = STATE_CONNECTING to ""
-                worker = Thread({ runTunnel(p) }, "oc-engine").also { it.start() }
+                saveLast(p)
+                startConnect(p)
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun startConnect(p: OcParams) {
+        if (worker?.isAlive == true) return
+        clearPaused()
+        if (p.server.isBlank() || p.user.isBlank()) {
+            fail("سرور و نام کاربری الزامی است")
+            return
+        }
+        serverLabel = p.server
+        runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…", "OpenConnect · ${p.server}")) }
+        stateFlow.value = STATE_CONNECTING to ""
+        worker = Thread({ runTunnel(p) }, "oc-engine").also { it.start() }
     }
 
     private fun runTunnel(p: OcParams) {
@@ -140,7 +161,7 @@ class OcVpnService : VpnService() {
             val msg = "کتابخانهٔ OpenConnect (libopenconnect.so) در این نسخه بارگذاری نشد: ${loadError.javaClass.name}: ${loadError.message}"
             AppLogger.log("OpenConnect", msg)
             stateFlow.value = STATE_FAILED to msg
-            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
             stopSelf()
             return
         }
@@ -153,11 +174,14 @@ class OcVpnService : VpnService() {
             describeError(t)
         }
         if (error != null) AppLogger.log("OpenConnect", error)
+        stopSpeed()
         closeTun()
         runCatching { s?.destroy() }
         session = null
-        stateFlow.value = if (error == null) STATE_IDLE to "" else STATE_FAILED to error
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        if (stateFlow.value.first != STATE_FAILED && stateFlow.value.first != STATE_PAUSED) {
+            stateFlow.value = if (error == null) STATE_IDLE to "" else STATE_FAILED to error
+        }
+        runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
         stopSelf()
     }
 
@@ -180,7 +204,8 @@ class OcVpnService : VpnService() {
         if (s.setupTunFD(pfd.fd) != 0) return "تحویل رابط TUN به موتور ناموفق بود"
 
         stateFlow.value = STATE_CONNECTED to ip.addr
-        updateNotification("متصل · ${ip.addr}")
+        updateNotification("متصل · ${ip.addr}", "OpenConnect · $serverLabel")
+        startSpeed()
         while (true) {
             if (s.mainloop(10, LibOpenConnect.RECONNECT_INTERVAL_MIN) < 0) break
         }
@@ -212,19 +237,72 @@ class OcVpnService : VpnService() {
         mask?.split(".")?.mapNotNull { it.toIntOrNull() }?.takeIf { it.size == 4 }
             ?.sumOf { Integer.bitCount(it) } ?: 32
 
+    /** توقف موقت: نشست بسته می‌شود، ولی نوتیفیکیشن «اتصال مجدد» می‌ماند. */
+    private fun pauseNow() {
+        AppLogger.log("OpenConnect", "توقف موقت")
+        stopSpeed()
+        runCatching { session?.cancel() }
+        closeTun()
+        worker = null
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("paused", true).apply()
+        stateFlow.value = STATE_PAUSED to ""
+        runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_PAUSED_ID, buildPausedNotification())
+        stopSelf()
+    }
+
+    private fun clearPaused() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("paused", false).apply()
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_PAUSED_ID)
+    }
+
+    /** سرعت لحظه‌ای از شمارندهٔ tun، هر ثانیه در عنوان نوتیفیکیشن. */
+    private fun startSpeed() {
+        stopSpeed()
+        val t = Thread({
+            var prev = VpnNotify.tunCounters() ?: (0L to 0L)
+            var prevT = SystemClock.elapsedRealtime()
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(1000L)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                val cur = VpnNotify.tunCounters() ?: continue
+                val now = SystemClock.elapsedRealtime()
+                val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
+                val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()
+                val up = ((cur.second - prev.second).coerceAtLeast(0L) / sec).toLong()
+                prev = cur
+                prevT = now
+                updateNotification("↓ ${VpnNotify.speedText(down)}   ↑ ${VpnNotify.speedText(up)}", "OpenConnect · $serverLabel")
+            }
+        }, "oc-speed")
+        t.isDaemon = true
+        speedThread = t
+        t.start()
+    }
+
+    private fun stopSpeed() {
+        speedThread?.interrupt()
+        speedThread = null
+    }
+
     /** آزادسازی منابع بدون تغییر وضعیت (برای onDestroy). */
     private fun releaseResources() {
+        stopSpeed()
         runCatching { session?.cancel() }
         closeTun()
         worker = null
     }
 
     private fun stopAll() {
+        stopSpeed()
         runCatching { session?.cancel() }
         closeTun()
         worker = null
         stateFlow.value = STATE_IDLE to ""
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
     }
 
     private fun closeTun() {
@@ -232,32 +310,53 @@ class OcVpnService : VpnService() {
         tun = null
     }
 
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "OpenConnect", NotificationManager.IMPORTANCE_LOW))
-        }
+    private fun fail(message: String) {
+        AppLogger.log(TAG, "خطا: $message")
+        if (stateFlow.value.first != STATE_FAILED) stateFlow.value = STATE_FAILED to message
+        runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
+        stopSelf()
     }
 
-    private fun buildNotification(text: String): Notification {
-        val disconnect = PendingIntent.getService(
-            this, 0,
-            Intent(this, OcVpnService::class.java).setAction(ACTION_DISCONNECT),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-            .setContentTitle("OpenConnect (AnyConnect)")
-            .setContentText(text)
-            .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "قطع", disconnect)
-            .build()
+    private fun buildNotification(title: String, text: String) = VpnNotify.build(
+        this,
+        CHANNEL_ID,
+        title,
+        text,
+        listOf(
+            "توقف موقت" to VpnNotify.serviceIntent(this, OcVpnService::class.java, ACTION_PAUSE, 3),
+            "قطع کامل" to VpnNotify.serviceIntent(this, OcVpnService::class.java, ACTION_DISCONNECT, 4),
+        ),
+        ongoing = true,
+        open = VpnNotify.openAppIntent(this, 22),
+    )
+
+    private fun buildPausedNotification() = VpnNotify.build(
+        this,
+        CHANNEL_ID,
+        "OpenConnect · متوقف موقت",
+        "برای ادامه، اتصال مجدد را بزنید",
+        listOf(
+            "اتصال مجدد" to VpnNotify.serviceIntent(this, OcVpnService::class.java, ACTION_RESUME, 1),
+            "قطع کامل" to VpnNotify.serviceIntent(this, OcVpnService::class.java, ACTION_DISCONNECT, 2),
+        ),
+        ongoing = false,
+        open = VpnNotify.openAppIntent(this, 23),
+    )
+
+    private fun updateNotification(title: String, text: String) {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(title, text))
     }
 
-    private fun updateNotification(text: String) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification(text))
+    private fun saveLast(p: OcParams) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString("server", p.server).putInt("port", p.port).putString("user", p.user)
+            .putString("password", p.password).putString("group", p.group).putString("pin", p.pin).apply()
+    }
+
+    private fun loadLast(): OcParams? {
+        val sp = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val server = sp.getString("server", null) ?: return null
+        return OcParams(server, sp.getInt("port", 443), sp.getString("user", "").orEmpty(),
+            sp.getString("password", "").orEmpty(), sp.getString("group", "").orEmpty(), sp.getString("pin", "").orEmpty())
     }
 }

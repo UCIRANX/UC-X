@@ -1,16 +1,13 @@
 package io.github.evokelektrique.tunnelforge
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import androidx.annotation.Keep
-import androidx.core.app.NotificationCompat
+import com.multivpn.app.VpnNotify
 import com.multivpn.app.log.AppLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,7 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * سرویس VPN برای L2TP/IPsec (IKEv1 با PSK) بر پایهٔ موتور C از TunnelForge.
- * نسخهٔ UC X: فقط حالت تونل کامل؛ بدون پروکسی، Netty و gVisor.
+ * نسخهٔ UC X: فقط تونل کامل؛ بدون پروکسی، Netty و gVisor.
  *
  * قرارداد با موتور C (vpn_jni.c / util.c) را نباید تغییر داد:
  *  - protectSocketFd(I)Z و onNativeTunnelReady(String) باید static در همین کلاس باشند.
@@ -29,6 +26,8 @@ class TunnelVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "io.github.evokelektrique.tunnelforge.CONNECT"
         const val ACTION_DISCONNECT = "io.github.evokelektrique.tunnelforge.DISCONNECT"
+        const val ACTION_PAUSE = "io.github.evokelektrique.tunnelforge.PAUSE"
+        const val ACTION_RESUME = "io.github.evokelektrique.tunnelforge.RESUME"
         const val EXTRA_SERVER = "server"
         const val EXTRA_USER = "user"
         const val EXTRA_PASSWORD = "password"
@@ -39,22 +38,20 @@ class TunnelVpnService : VpnService() {
         const val STATE_CONNECTING = "connecting"
         const val STATE_CONNECTED = "connected"
         const val STATE_FAILED = "failed"
+        const val STATE_PAUSED = "paused"
 
         private const val CONNECT_TIMEOUT_MS = 150_000L
         private const val CHANNEL_ID = "l2tp_vpn"
         private const val NOTIFICATION_ID = 2101
+        private const val NOTIFICATION_PAUSED_ID = 2102
         private const val DEFAULT_MTU = 1400
         private const val FALLBACK_DNS = "8.8.8.8"
+        private const val PREFS = "proto_last_l2tp"
 
         private val stateFlow = MutableStateFlow(STATE_IDLE to "")
 
         /** (وضعیت، توضیح) برای نمایش در UI. */
         val state: StateFlow<Pair<String, String>> = stateFlow.asStateFlow()
-
-        /** پاک کردن خطای نمایش‌داده‌شده (وضعیت FAILED → IDLE). */
-        fun dismissError() {
-            if (stateFlow.value.first == STATE_FAILED) stateFlow.value = STATE_IDLE to ""
-        }
 
         @Volatile
         private var instance: TunnelVpnService? = null
@@ -67,6 +64,11 @@ class TunnelVpnService : VpnService() {
         @JvmStatic
         fun onNativeTunnelReady(detail: String?) {
             stateFlow.value = STATE_CONNECTED to (detail ?: "")
+        }
+
+        /** پاک کردن خطای نمایش‌داده‌شده (وضعیت FAILED → IDLE). */
+        fun dismissError() {
+            if (stateFlow.value.first == STATE_FAILED) stateFlow.value = STATE_IDLE to ""
         }
 
         /** برای شروع از UI: Intent اتصال با پارامترهای پروفایل. */
@@ -98,11 +100,17 @@ class TunnelVpnService : VpnService() {
     @Volatile
     private var attemptSeq: Int = 0
 
+    @Volatile
+    private var speedThread: Thread? = null
+
+    @Volatile
+    private var serverLabel: String = ""
+
     override fun onCreate() {
         super.onCreate()
         AppLogger.init(applicationContext)
         instance = this
-        createChannel()
+        VpnNotify.channel(this, CHANNEL_ID, "L2TP/IPsec")
     }
 
     override fun onDestroy() {
@@ -115,33 +123,49 @@ class TunnelVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_DISCONNECT -> {
+                clearPaused()
                 stopTunnel()
                 stopSelf()
             }
+            ACTION_PAUSE -> pauseNow()
+            ACTION_RESUME -> {
+                val p = loadLast()
+                if (p == null) {
+                    fail("اتصال قبلی برای ادامه پیدا نشد")
+                } else {
+                    startConnect(p.server, p.user, p.password, p.psk, p.mtu)
+                }
+            }
             ACTION_CONNECT -> {
-                if (worker?.isAlive == true) return START_NOT_STICKY
                 val server = intent.getStringExtra(EXTRA_SERVER).orEmpty()
                 val user = intent.getStringExtra(EXTRA_USER).orEmpty()
                 val password = intent.getStringExtra(EXTRA_PASSWORD).orEmpty()
                 val psk = intent.getStringExtra(EXTRA_PSK).orEmpty()
                 val mtu = intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU)
-                if (server.isBlank() || user.isBlank() || psk.isBlank()) {
-                    stateFlow.value = STATE_FAILED to "سرور، PSK و نام کاربری الزامی است"
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-                runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…")) }
-                stateFlow.value = STATE_CONNECTING to ""
-                AppLogger.log("L2TP", "اتصال به $server (کاربر $user) شروع شد")
-                val attempt = ++attemptSeq
-                worker = Thread({ runTunnel(server, user, password, psk, mtu) }, "l2tp-engine").also { it.start() }
-                startWatchdog(attempt)
+                saveLast(server, user, password, psk, mtu)
+                startConnect(server, user, password, psk, mtu)
             }
         }
         return START_NOT_STICKY
     }
 
-    /** اگر تا مهلت به «متصل» نرسیم، مذاکره را متوقف و علت (آخرین پیام موتور) را نشان می‌دهیم. */
+    private fun startConnect(server: String, user: String, password: String, psk: String, mtu: Int) {
+        if (worker?.isAlive == true) return
+        clearPaused()
+        if (server.isBlank() || user.isBlank() || psk.isBlank()) {
+            fail("سرور، PSK و نام کاربری الزامی است")
+            return
+        }
+        serverLabel = server
+        runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…", "L2TP/IPsec · $server")) }
+        stateFlow.value = STATE_CONNECTING to ""
+        AppLogger.log("L2TP", "اتصال به $server (کاربر $user) شروع شد")
+        val attempt = ++attemptSeq
+        worker = Thread({ runTunnel(server, user, password, psk, mtu) }, "l2tp-engine").also { it.start() }
+        startWatchdog(attempt)
+    }
+
+    /** اگر تا مهلت به «متصل» نرسیم، مذاکره را متوقف و علت (پیام‌های موتور) را نشان می‌دهیم. */
     private fun startWatchdog(attempt: Int) {
         Thread({
             try {
@@ -172,11 +196,11 @@ class TunnelVpnService : VpnService() {
             return
         }
         if (negotiated != 0) {
-            // اگر مهلت قبلاً خطا ثبت کرده، پیام مهلت را بازنویسی نمی‌کنیم
-            if (stateFlow.value.first != STATE_FAILED) {
+            // اگر مهلت قبلاً خطا ثبت کرده، پیام مهلت بازنویسی نمی‌شود
+            if (stateFlow.value.first != STATE_FAILED && stateFlow.value.first != STATE_PAUSED) {
                 fail("اتصال L2TP برقرار نشد (کد $negotiated) · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}")
             } else {
-                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
                 runCatching { stopSelf() }
             }
             return
@@ -202,7 +226,9 @@ class TunnelVpnService : VpnService() {
             return
         }
         tun = pfd
-        updateNotification("متصل · ${ipv4(clientIp)}")
+        stateFlow.value = STATE_CONNECTED to ipv4(clientIp)
+        updateNotification("متصل · ${ipv4(clientIp)}", "L2TP/IPsec · $serverLabel")
+        startSpeed()
 
         // مرحلهٔ ۳: حلقهٔ تونل (تا قطع شدن ادامه دارد)
         val loopCode = try {
@@ -210,27 +236,50 @@ class TunnelVpnService : VpnService() {
         } catch (t: Throwable) {
             -1
         }
+        stopSpeed()
         closeTun()
-        if (stateFlow.value.first != STATE_FAILED) {
+        AppLogger.log("L2TP", "حلقهٔ تونل پایان یافت (کد $loopCode)")
+        if (stateFlow.value.first != STATE_FAILED && stateFlow.value.first != STATE_PAUSED) {
             stateFlow.value = STATE_IDLE to "قطع شد (کد $loopCode)"
         }
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
         stopSelf()
+    }
+
+    /** توقف موقت: تونل بسته می‌شود، ولی نوتیفیکیشن «اتصال مجدد» می‌ماند. */
+    private fun pauseNow() {
+        AppLogger.log("L2TP", "توقف موقت")
+        stopSpeed()
+        runCatching { VpnBridge.nativeStopTunnel() }
+        closeTun()
+        worker = null
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("paused", true).apply()
+        stateFlow.value = STATE_PAUSED to ""
+        runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_PAUSED_ID, buildPausedNotification())
+        stopSelf()
+    }
+
+    private fun clearPaused() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("paused", false).apply()
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_PAUSED_ID)
     }
 
     /** آزادسازی منابع بدون تغییر وضعیت (برای onDestroy). */
     private fun releaseResources() {
+        stopSpeed()
         runCatching { VpnBridge.nativeStopTunnel() }
         closeTun()
         worker = null
     }
 
     private fun stopTunnel() {
+        stopSpeed()
         runCatching { VpnBridge.nativeStopTunnel() }
         closeTun()
         worker = null
         stateFlow.value = STATE_IDLE to ""
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
     }
 
     private fun closeTun() {
@@ -241,8 +290,40 @@ class TunnelVpnService : VpnService() {
     private fun fail(message: String) {
         AppLogger.log("L2TP", "خطا: $message")
         if (stateFlow.value.first != STATE_FAILED) stateFlow.value = STATE_FAILED to message
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
         stopSelf()
+    }
+
+    /** سرعت لحظه‌ای از شمارندهٔ tun، هر ثانیه در عنوان نوتیفیکیشن. */
+    private fun startSpeed() {
+        stopSpeed()
+        val t = Thread({
+            var prev = VpnNotify.tunCounters() ?: (0L to 0L)
+            var prevT = SystemClock.elapsedRealtime()
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(1000L)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                val cur = VpnNotify.tunCounters() ?: continue
+                val now = SystemClock.elapsedRealtime()
+                val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
+                val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()
+                val up = ((cur.second - prev.second).coerceAtLeast(0L) / sec).toLong()
+                prev = cur
+                prevT = now
+                updateNotification("↓ ${VpnNotify.speedText(down)}   ↑ ${VpnNotify.speedText(up)}", "L2TP/IPsec · $serverLabel")
+            }
+        }, "l2tp-speed")
+        t.isDaemon = true
+        speedThread = t
+        t.start()
+    }
+
+    private fun stopSpeed() {
+        speedThread?.interrupt()
+        speedThread = null
     }
 
     private fun isSet(a: IntArray): Boolean = a.any { it != 0 }
@@ -251,34 +332,48 @@ class TunnelVpnService : VpnService() {
 
     private fun ipv4OrDefault(a: IntArray): String = if (isSet(a)) ipv4(a) else FALLBACK_DNS
 
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "L2TP/IPsec", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
+    private fun buildNotification(title: String, text: String) = VpnNotify.build(
+        this,
+        CHANNEL_ID,
+        title,
+        text,
+        listOf(
+            "توقف موقت" to VpnNotify.serviceIntent(this, TunnelVpnService::class.java, ACTION_PAUSE, 3),
+            "قطع کامل" to VpnNotify.serviceIntent(this, TunnelVpnService::class.java, ACTION_DISCONNECT, 4),
+        ),
+        ongoing = true,
+        open = VpnNotify.openAppIntent(this, 20),
+    )
+
+    private fun buildPausedNotification() = VpnNotify.build(
+        this,
+        CHANNEL_ID,
+        "L2TP/IPsec · متوقف موقت",
+        "برای ادامه، اتصال مجدد را بزنید",
+        listOf(
+            "اتصال مجدد" to VpnNotify.serviceIntent(this, TunnelVpnService::class.java, ACTION_RESUME, 1),
+            "قطع کامل" to VpnNotify.serviceIntent(this, TunnelVpnService::class.java, ACTION_DISCONNECT, 2),
+        ),
+        ongoing = false,
+        open = VpnNotify.openAppIntent(this, 21),
+    )
+
+    private fun updateNotification(title: String, text: String) {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(title, text))
     }
 
-    private fun buildNotification(text: String): Notification {
-        val disconnect = PendingIntent.getService(
-            this, 0,
-            Intent(this, TunnelVpnService::class.java).setAction(ACTION_DISCONNECT),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-            .setContentTitle("L2TP/IPsec")
-            .setContentText(text)
-            .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "قطع", disconnect)
-            .build()
+    private data class Last(val server: String, val user: String, val password: String, val psk: String, val mtu: Int)
+
+    private fun saveLast(server: String, user: String, password: String, psk: String, mtu: Int) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString("server", server).putString("user", user).putString("password", password)
+            .putString("psk", psk).putInt("mtu", mtu).apply()
     }
 
-    private fun updateNotification(text: String) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification(text))
+    private fun loadLast(): Last? {
+        val p = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val server = p.getString("server", null) ?: return null
+        return Last(server, p.getString("user", "").orEmpty(), p.getString("password", "").orEmpty(),
+            p.getString("psk", "").orEmpty(), p.getInt("mtu", DEFAULT_MTU))
     }
 }

@@ -158,7 +158,7 @@ fun ProtocolScreen() {
     val ikev2Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     AppLogger.init(context)
 
-    var listTab by rememberSaveable { mutableStateOf(1) } // 0 = ساب‌لینک، 1 = دستی
+    var listTab by rememberSaveable { mutableStateOf(0) } // 0 = ساب‌لینک (پیش‌فرض)، 1 = دستی
     var manualList by remember { mutableStateOf(ProtoLists.manual(context)) }
     var subList by remember { mutableStateOf(ProtoLists.loadSub(context)) }
     var favMan by remember { mutableStateOf(ProtoLists.favManKeys(context)) }
@@ -273,6 +273,7 @@ fun ProtocolScreen() {
         ikev2Connected -> "متصل · IKEv2"
         l2tpConnected -> "متصل · L2TP/IPsec"
         ocConnected -> "متصل · OpenConnect"
+        l2tpState.first == TunnelVpnService.STATE_PAUSED || ocState.first == OcVpnService.STATE_PAUSED -> "متوقف موقت"
         l2tpBusy -> "در حال اتصال… · L2TP/IPsec"
         ocBusy -> "در حال اتصال… · OpenConnect"
         else -> "قطع"
@@ -309,14 +310,7 @@ fun ProtocolScreen() {
         )
         if (note.isNotBlank()) Text(note, color = PTextSub, fontSize = 11.sp, textAlign = TextAlign.Center)
         if (errorDetail != null) {
-            ErrorCard(
-                summary = errorDetail.lineSequence().firstOrNull().orEmpty().take(160),
-                onDetails = { showLog = true },
-                onDismiss = {
-                    TunnelVpnService.dismissError()
-                    OcVpnService.dismissError()
-                },
-            )
+            Text("متصل نشد؛ لاگ برنامه را ببینید", color = PDanger, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
 
@@ -395,10 +389,12 @@ fun ProtocolScreen() {
             OutlinedButton(
                 onClick = {
                     updating = true
-                    note = ProtoLists.refreshSub(context)
-                    subList = ProtoLists.loadSub(context)
-                    favSub = ProtoLists.favSub(context)
-                    updating = false
+                    scope.launch {
+                        note = ProtoLists.refreshSub(context)
+                        subList = ProtoLists.loadSub(context)
+                        favSub = ProtoLists.favSub(context)
+                        updating = false
+                    }
                 },
                 enabled = !updating,
                 modifier = Modifier.weight(1f),
@@ -522,7 +518,7 @@ fun ProtocolScreen() {
     }
 }
 
-/** فهرست یک بخش: قلب، نام، نوع پروتکل؛ و در بخش دستی ویرایش و حذف. */
+/** فهرست یک بخش: فشرده (۱۰ تا ۱۴ ردیف در صفحه)؛ قلب، نام، نوع پروتکل، ویرایش و سطل آشغال. */
 @Composable
 private fun ServerList(
     rows: List<ProtoServer>,
@@ -547,26 +543,26 @@ private fun ServerList(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .padding(vertical = 2.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(if (isSel) c.copy(alpha = 0.18f) else Color.Transparent)
-                    .border(1.dp, if (isSel) c else c.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                    .border(1.dp, if (isSel) c else c.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
                     .clickable { onSelect(s) }
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     imageVector = if (isFav(s)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                     contentDescription = "قلب",
                     tint = if (isFav(s)) Color(0xFFFF5C7A) else PTextSub,
-                    modifier = Modifier.size(18.dp).clickable { onFav(s) },
+                    modifier = Modifier.size(16.dp).clickable { onFav(s) },
                 )
                 Spacer8()
                 Column(Modifier.weight(1f)) {
                     Text(
                         s.label,
                         color = PTextMain,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -574,13 +570,24 @@ private fun ServerList(
                     Text(
                         "${s.type.label} · ${s.host}${if (s.type == VpnType.OPENCONNECT) ":${s.port}" else ""}",
                         color = c,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (onEdit != null) TextButton(onClick = { onEdit(s) }) { Text("ویرایش", color = c, fontSize = 12.sp) }
-                if (onDelete != null) TextButton(onClick = { onDelete(s) }) { Text("حذف", color = PDanger, fontSize = 12.sp) }
+                if (onEdit != null) {
+                    TextButton(onClick = { onEdit(s) }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp)) {
+                        Text("ویرایش", color = c, fontSize = 11.sp)
+                    }
+                }
+                if (onDelete != null) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "حذف",
+                        tint = PDanger,
+                        modifier = Modifier.size(18.dp).clickable { onDelete(s) },
+                    )
+                }
             }
         }
     }
