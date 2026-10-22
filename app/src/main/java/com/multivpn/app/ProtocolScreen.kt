@@ -318,7 +318,7 @@ fun ProtocolScreen() {
         l2tpConnected -> "متصل · L2TP/IPsec"
         ocConnected -> "متصل · OpenConnect"
         l2tpState.first == TunnelVpnService.STATE_PAUSED || ocState.first == OcVpnService.STATE_PAUSED -> "متوقف موقت"
-        l2tpBusy -> "در حال اتصال… · L2TP/IPsec"
+        l2tpBusy -> "در حال اتصال… · " + (if (l2tpState.second.isBlank()) "L2TP/IPsec" else l2tpState.second)
         ocBusy -> "در حال اتصال… · OpenConnect"
         else -> "قطع"
     }
@@ -390,7 +390,7 @@ fun ProtocolScreen() {
         Column(mod.fillMaxWidth().background(Surface1, RoundedCornerShape(16.dp)).padding(6.dp)) {
             if (listTab == 0) {
                 val favKeys = favSub.map { it.key }.toSet()
-                val rows = favSub + subList.filter { it.key !in favKeys }
+                val rows = favSub + subList.sortedBy { if (it.source == ProtoLists.PLUS_URL) 0 else 1 }.filter { it.key !in favKeys }
                 ServerList(
                     rows = rows,
                     emptyText = if (ProtoLists.SUB_URLS.isEmpty()) "لینک ساب‌لینک این بخش هنوز تنظیم نشده است" else "سروری از ساب‌لینک نیست؛ بروزرسانی کنید",
@@ -466,11 +466,13 @@ fun ProtocolScreen() {
                 Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) { header() }
+            ) {
+                header()
+                actions()
+            }
             Column(Modifier.weight(1.2f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 tabs()
                 list(Modifier.weight(1f))
-                actions()
             }
         }
     } else {

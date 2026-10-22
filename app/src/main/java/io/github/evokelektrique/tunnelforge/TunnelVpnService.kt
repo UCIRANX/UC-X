@@ -40,7 +40,9 @@ class TunnelVpnService : VpnService() {
         const val STATE_FAILED = "failed"
         const val STATE_PAUSED = "paused"
 
-        private const val CONNECT_TIMEOUT_MS = 150_000L
+        private const val CONNECT_TIMEOUT_MS = 240_000L
+        private const val MAX_ATTEMPTS = 3
+        private const val RETRY_PAUSE_MS = 4_000L
         private const val CHANNEL_ID = "l2tp_vpn"
         private const val NOTIFICATION_ID = 2101
         private const val NOTIFICATION_PAUSED_ID = 2102
@@ -174,8 +176,8 @@ class TunnelVpnService : VpnService() {
             }
             if (attempt == attemptSeq && stateFlow.value.first == STATE_CONNECTING) {
                 stateFlow.value = STATE_FAILED to
-                    "مهلت ۱۵۰ ثانیه تمام شد · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}"
-                AppLogger.log("L2TP", "مهلت ۱۵۰ ثانیه تمام شد")
+                    "مهلت اتصال تمام شد · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}"
+                AppLogger.log("L2TP", "مهلت اتصال تمام شد")
                 runCatching { VpnBridge.nativeStopTunnel() }
                 runCatching { stopSelf() }
             }
@@ -186,25 +188,46 @@ class TunnelVpnService : VpnService() {
         val clientIp = IntArray(4)
         val dns1 = IntArray(4)
         val dns2 = IntArray(4)
-        val negotiated: Int
-        try {
-            // مرحلهٔ ۱: IKE + L2TP + PPP روی شبکهٔ واقعی (هنوز تونل نیست)
-            VpnBridge.nativeSetSocketProtectionEnabled(true)
-            negotiated = VpnBridge.nativeNegotiate(server, user, password, psk, mtu, clientIp, dns1, dns2)
-        } catch (t: Throwable) {
-            fail("موتور L2TP بارگذاری یا اجرا نشد: ${t.message ?: t.javaClass.simpleName}")
-            return
+        var negotiated = -1
+        var usedAttempt = 0
+        for (attempt in 1..MAX_ATTEMPTS) {
+            // اگر کاربر قطع کرده یا مکث داده، ادامهٔ تلاش‌ها لازم نیست
+            if (stateFlow.value.first != STATE_CONNECTING) break
+            val label = "تلاش $attempt از $MAX_ATTEMPTS"
+            stateFlow.value = STATE_CONNECTING to label
+            updateNotification(label, "L2TP/IPsec · $serverLabel")
+            AppLogger.log("L2TP", "$label برای $server")
+            negotiated = try {
+                // هر تلاش با کوکی‌ها و نشست IKE تازه شروع می‌شود
+                VpnBridge.nativeSetSocketProtectionEnabled(true)
+                VpnBridge.nativeNegotiate(server, user, password, psk, mtu, clientIp, dns1, dns2)
+            } catch (t: Throwable) {
+                AppLogger.log("L2TP", "موتور اجرا نشد: ${t.message ?: t.javaClass.simpleName}")
+                -1
+            }
+            usedAttempt = attempt
+            if (negotiated == 0 || negotiated == 12) break // ۱۲ = توقف از بیرون
+            if (attempt < MAX_ATTEMPTS) {
+                AppLogger.log("L2TP", "$label ناموفق (کد $negotiated)؛ مکث $RETRY_PAUSE_MS میلی‌ثانیه و تلاش بعدی")
+                try {
+                    Thread.sleep(RETRY_PAUSE_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
         }
+        recordStats(server, negotiated == 0, usedAttempt)
         if (negotiated != 0) {
             // اگر مهلت قبلاً خطا ثبت کرده، پیام مهلت بازنویسی نمی‌شود
             if (stateFlow.value.first != STATE_FAILED && stateFlow.value.first != STATE_PAUSED) {
-                fail("اتصال L2TP برقرار نشد (کد $negotiated) · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}")
+                fail("اتصال L2TP پس از $usedAttempt از $MAX_ATTEMPTS تلاش برقرار نشد (کد $negotiated) · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}")
             } else {
                 runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
                 runCatching { stopSelf() }
             }
             return
         }
+        AppLogger.log("L2TP", "اتصال در تلاش $usedAttempt از $MAX_ATTEMPTS برقرار شد")
 
         // مرحلهٔ ۲: ساخت رابط TUN با IP و DNS که سرور داده است
         val pfd = try {
@@ -292,6 +315,16 @@ class TunnelVpnService : VpnService() {
         if (stateFlow.value.first != STATE_FAILED) stateFlow.value = STATE_FAILED to message
         runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
         stopSelf()
+    }
+
+    /** آمار موفقیت هر سرور در لاگ تا روند مشکل دیده شود. */
+    private fun recordStats(server: String, ok: Boolean, attempt: Int) {
+        val sp = getSharedPreferences("L2TP_STATS", MODE_PRIVATE)
+        val okN = sp.getInt("$server.ok", 0) + if (ok) 1 else 0
+        val failN = sp.getInt("$server.fail", 0) + if (ok) 0 else 1
+        sp.edit().putInt("$server.ok", okN).putInt("$server.fail", failN).apply()
+        val result = if (ok) "موفق در تلاش $attempt" else "ناموفق"
+        AppLogger.log("L2TP-stats", "سرور $server: موفق $okN · ناموفق $failN (این بار: $result)")
     }
 
     /** سرعت لحظه‌ای از شمارندهٔ tun، هر ثانیه در عنوان نوتیفیکیشن. */

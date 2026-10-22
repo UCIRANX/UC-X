@@ -10,6 +10,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.multivpn.app.sub.DohClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
 import org.json.JSONArray
@@ -40,6 +42,8 @@ data class ProtoServer(
     val rawKey: String,
     /** کد دو حرفی کشور از ساب‌لینک (اختیاری)؛ نام فارسی آن در نمایش ساخته می‌شود. */
     val country: String = "",
+    /** آدرس منبع ساب‌لینک که این سرور از آن آمده است. */
+    val source: String = "",
 ) {
     val key: String get() = "${type.name}|$host|$port|$user"
     val label: String get() = if (name.isNotBlank()) name else host
@@ -56,9 +60,12 @@ object ProtoLists {
      * لینک‌های ساب‌لینک بخش پروتکل‌ها. هنوز تنظیم نشده‌اند؛ پس از ارسال لینک و
      * نمونهٔ فرمت، اینجا اضافه می‌شوند.
      */
+    /** ساب‌لینک اصلی پلاس؛ سرورهای آن در لیست بالاتر از بقیه نشان داده می‌شوند. */
+    const val PLUS_URL = "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcPlus.txt"
+
     val SUB_URLS: List<String> = listOf(
         "https://raw.githubusercontent.com/UCIRANX/Comp/refs/heads/main/UcL2tp.txt",
-        "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcPlus.txt",
+        PLUS_URL,
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt",
     )
 
@@ -166,22 +173,32 @@ object ProtoLists {
      */
     suspend fun refreshSub(ctx: Context): String {
         val tunnel = SubRefresh.tunnelProxy(ctx)
-        var text: String? = null
-        if (tunnel != null) text = withTimeoutOrNull(20_000L) { collectAll(tunnel) }
-        if (text == null) text = collectAll(null)
-        if (text == null) return "دریافت ساب‌لینک ناموفق بود"
-        val servers = LinkedHashMap<String, ProtoServer>()
-        PlusParser.parse(text).forEach { servers.putIfAbsent(it.key, it) }
-        saveSub(ctx, servers.values.toList())
-        markUpdated(ctx)
-        return "${servers.size} سرور از ساب‌لینک دریافت شد"
+        var got: List<Pair<String, String>>? = null
+        if (tunnel != null) got = withTimeoutOrNull(20_000L) { collectAll(tunnel) }
+        if (got == null) got = collectAll(null)
+        val res = got ?: return "دریافت ساب‌لینک ناموفق بود"
+        // تجزیه و ذخیره روی پس‌زمینه انجام می‌شود تا رابط کاربری قفل نشود
+        return withContext(Dispatchers.IO) {
+            val servers = LinkedHashMap<String, ProtoServer>()
+            res.forEach { (url, text) ->
+                PlusParser.parse(text).forEach { servers.putIfAbsent(it.key, it.copy(source = url)) }
+            }
+            saveSub(ctx, servers.values.toList())
+            markUpdated(ctx)
+            "${servers.size} سرور از ساب‌لینک دریافت شد"
+        }
     }
 
-    private suspend fun collectAll(proxy: java.net.Proxy?): String? {
-        val out = StringBuilder()
+    /** هر لینک اصلی جدا جمع می‌شود تا سرورهای هر منبع بتوانند اولویت بگیرند. */
+    private suspend fun collectAll(proxy: java.net.Proxy?): List<Pair<String, String>>? {
         val visited = mutableSetOf<String>()
-        for (u in SUB_URLS) collect(u, 0, visited, out, proxy)
-        return if (out.isBlank()) null else out.toString()
+        val results = mutableListOf<Pair<String, String>>()
+        for (u in SUB_URLS) {
+            val out = StringBuilder()
+            collect(u, 0, visited, out, proxy)
+            if (out.isNotBlank()) results += u to out.toString()
+        }
+        return if (results.isEmpty()) null else results
     }
 
     private suspend fun collect(url: String, depth: Int, visited: MutableSet<String>, out: StringBuilder, proxy: java.net.Proxy?) {
