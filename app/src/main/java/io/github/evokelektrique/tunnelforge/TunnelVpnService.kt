@@ -227,7 +227,7 @@ class TunnelVpnService : VpnService() {
         }
         tun = pfd
         stateFlow.value = STATE_CONNECTED to ipv4(clientIp)
-        updateNotification("متصل · ${ipv4(clientIp)}", "L2TP/IPsec · $serverLabel")
+        updateNotification("↓ 0 B/s   ↑ 0 B/s", "L2TP/IPsec · $serverLabel")
         startSpeed()
 
         // مرحلهٔ ۳: حلقهٔ تونل (تا قطع شدن ادامه دارد)
@@ -306,7 +306,12 @@ class TunnelVpnService : VpnService() {
                 } catch (_: InterruptedException) {
                     break
                 }
-                val cur = VpnNotify.tunCounters() ?: continue
+                val cur = VpnNotify.tunCounters()
+                if (cur == null) {
+                    // شمارنده خوانده نشد: عدد صفر ساختگی نشان نمی‌دهیم
+                    updateNotification("متصل", "L2TP/IPsec · $serverLabel")
+                    continue
+                }
                 val now = SystemClock.elapsedRealtime()
                 val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
                 val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()

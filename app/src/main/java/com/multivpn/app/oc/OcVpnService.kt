@@ -204,7 +204,7 @@ class OcVpnService : VpnService() {
         if (s.setupTunFD(pfd.fd) != 0) return "تحویل رابط TUN به موتور ناموفق بود"
 
         stateFlow.value = STATE_CONNECTED to ip.addr
-        updateNotification("متصل · ${ip.addr}", "OpenConnect · $serverLabel")
+        updateNotification("↓ 0 B/s   ↑ 0 B/s", "OpenConnect · $serverLabel")
         startSpeed()
         while (true) {
             if (s.mainloop(10, LibOpenConnect.RECONNECT_INTERVAL_MIN) < 0) break
@@ -268,7 +268,11 @@ class OcVpnService : VpnService() {
                 } catch (_: InterruptedException) {
                     break
                 }
-                val cur = VpnNotify.tunCounters() ?: continue
+                val cur = VpnNotify.tunCounters()
+                if (cur == null) {
+                    updateNotification("متصل", "OpenConnect · $serverLabel")
+                    continue
+                }
                 val now = SystemClock.elapsedRealtime()
                 val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
                 val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()
