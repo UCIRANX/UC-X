@@ -2,6 +2,7 @@ package io.github.evokelektrique.tunnelforge
 
 import android.util.Log
 import androidx.annotation.Keep
+import com.multivpn.app.log.AppLogger
 
 /**
  * پل لاگ موتور C به Logcat. نام کلاس و امضای متد با vpn_jni/util.c هم‌خوان است.
@@ -21,6 +22,7 @@ object VpnTunnelEvents {
     fun emitEngineLogFromNative(priority: Int, tag: String?, message: String?) {
         val line = message ?: ""
         Log.println(priority, "L2TP-${tag ?: "native"}", line)
+        AppLogger.log("L2TP-engine", line)
         recent.addLast(line)
         if (recent.size > 12) recent.removeFirst()
     }

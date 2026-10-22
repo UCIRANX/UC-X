@@ -54,6 +54,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ir.uciran.uctor.ui.Surface1
+import android.content.Intent
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.multivpn.app.log.AppLogger
 import androidx.compose.runtime.collectAsState
 import io.github.evokelektrique.tunnelforge.TunnelVpnService
 import com.multivpn.app.oc.OcParams
@@ -104,6 +109,9 @@ private val OC_FIELDS = listOf(
 fun ProtocolScreen() {
     val context = LocalContext.current
     val config = LocalConfiguration.current
+    AppLogger.init(context)
+    val clipboard = LocalClipboardManager.current
+    var showLog by rememberSaveable { mutableStateOf(false) }
     val landscape = config.screenWidthDp > config.screenHeightDp
     val ikev2Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
@@ -252,19 +260,25 @@ fun ProtocolScreen() {
         1 -> when {
             l2tpConnected -> "متصل · ${l2tpList.firstOrNull { it.key == selL2tp }?.label ?: ""}"
             l2tpBusy -> "در حال اتصال…"
-            l2tpState.first == TunnelVpnService.STATE_FAILED -> "خطا: ${l2tpState.second}"
+            l2tpState.first == TunnelVpnService.STATE_FAILED -> "خطا در اتصال"
             else -> "قطع"
         }
         2 -> when {
             ocConnected -> "متصل · ${ocList.firstOrNull { it.key == selOc }?.label ?: ""}"
             ocBusy -> "در حال اتصال…"
-            ocState.first == OcVpnService.STATE_FAILED -> "خطا: ${ocState.second}"
+            ocState.first == OcVpnService.STATE_FAILED -> "خطا در اتصال"
             else -> "قطع"
         }
         else -> "${SECTION_TITLES[section]} · آماده‌ی ذخیره"
     }
 
     // ───── بخش‌های بالا: دایره، وضعیت، نکته ─────
+    val errorDetail: String? = when (section) {
+        1 -> if (l2tpState.first == TunnelVpnService.STATE_FAILED) l2tpState.second else null
+        2 -> if (ocState.first == OcVpnService.STATE_FAILED) ocState.second else null
+        else -> null
+    }
+
     val header: @Composable () -> Unit = {
         Box(
             modifier = Modifier
@@ -282,6 +296,16 @@ fun ProtocolScreen() {
         }
         Text(statusText, color = PTextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (note.isNotBlank()) Text(note, color = PTextSub, fontSize = 11.sp, textAlign = TextAlign.Center)
+        if (!errorDetail.isNullOrBlank()) {
+            ErrorBlock(
+                detail = errorDetail,
+                onCopy = { clipboard.setText(AnnotatedString(errorDetail)) },
+                onFullLog = { showLog = true },
+                onDismiss = {
+                    if (section == 1) TunnelVpnService.dismissError() else OcVpnService.dismissError()
+                },
+            )
+        }
     }
 
     // ───── نوارِ بخش‌ها ─────
@@ -411,6 +435,20 @@ fun ProtocolScreen() {
             list(Modifier.weight(1f))
             addRow()
         }
+    }
+
+    if (showLog) {
+        LogDialog(
+            text = AppLogger.read(),
+            onDismiss = { showLog = false },
+            onCopy = { clipboard.setText(AnnotatedString(AppLogger.read())) },
+            onShare = {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, AppLogger.read())
+                context.startActivity(Intent.createChooser(send, "ارسال لاگ"))
+            },
+            onClear = { AppLogger.clear() },
+        )
     }
 
     if (dialogOpen) {
@@ -588,5 +626,65 @@ private fun startOc(context: Context, e: OcEntry) {
             context,
             OcParams(e.server, e.port, e.username, e.password, e.authGroup, e.certPin),
         ),
+    )
+}
+
+/** کارت خطا: متن کامل قابل انتخاب، با دکمه‌های کپی، لاگ کامل و بستن. */
+@Composable
+private fun ErrorBlock(detail: String, onCopy: () -> Unit, onFullLog: () -> Unit, onDismiss: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x33FF6B6B))
+            .border(1.dp, PDanger, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SelectionContainer {
+            Text(detail, color = PTextMain, fontSize = 11.sp, textAlign = TextAlign.Start)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = onCopy, modifier = Modifier.weight(1f)) { Text("کپی خطا", fontSize = 11.sp) }
+            OutlinedButton(onClick = onFullLog, modifier = Modifier.weight(1f)) { Text("لاگ کامل", fontSize = 11.sp) }
+            OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("بستن", fontSize = 11.sp, color = PDanger) }
+        }
+    }
+}
+
+/** نمایش لاگ کامل برنامه با کپی، ارسال و پاک‌کردن. */
+@Composable
+private fun LogDialog(
+    text: String,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onClear: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Surface1,
+        title = { Text("لاگ برنامه", fontWeight = FontWeight.Bold) },
+        text = {
+            SelectionContainer {
+                Column(Modifier.fillMaxWidth().height(380.dp).verticalScroll(rememberScrollState())) {
+                    Text(
+                        text.ifBlank { "لاگی ثبت نشده است" },
+                        color = PTextMain,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onCopy) { Text("کپی") }
+                TextButton(onClick = onShare) { Text("ارسال") }
+                TextButton(onClick = onClear) { Text("پاک‌کردن", color = PDanger) }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("بستن") }
+        },
     )
 }

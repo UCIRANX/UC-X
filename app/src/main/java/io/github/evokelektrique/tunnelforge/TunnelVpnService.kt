@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.annotation.Keep
 import androidx.core.app.NotificationCompat
+import com.multivpn.app.log.AppLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,6 +50,11 @@ class TunnelVpnService : VpnService() {
 
         /** (وضعیت، توضیح) برای نمایش در UI. */
         val state: StateFlow<Pair<String, String>> = stateFlow.asStateFlow()
+
+        /** پاک کردن خطای نمایش‌داده‌شده (وضعیت FAILED → IDLE). */
+        fun dismissError() {
+            if (stateFlow.value.first == STATE_FAILED) stateFlow.value = STATE_IDLE to ""
+        }
 
         @Volatile
         private var instance: TunnelVpnService? = null
@@ -94,12 +100,14 @@ class TunnelVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLogger.init(applicationContext)
         instance = this
         createChannel()
     }
 
     override fun onDestroy() {
-        stopTunnel()
+        // خطا را پاک نمی‌کنیم: وضعیت FAILED باید روی صفحه بماند
+        releaseResources()
         instance = null
         super.onDestroy()
     }
@@ -124,6 +132,7 @@ class TunnelVpnService : VpnService() {
                 }
                 runCatching { startForeground(NOTIFICATION_ID, buildNotification("در حال اتصال…")) }
                 stateFlow.value = STATE_CONNECTING to ""
+                AppLogger.log("L2TP", "اتصال به $server (کاربر $user) شروع شد")
                 val attempt = ++attemptSeq
                 worker = Thread({ runTunnel(server, user, password, psk, mtu) }, "l2tp-engine").also { it.start() }
                 startWatchdog(attempt)
@@ -142,6 +151,7 @@ class TunnelVpnService : VpnService() {
             if (attempt == attemptSeq && stateFlow.value.first == STATE_CONNECTING) {
                 stateFlow.value = STATE_FAILED to
                     "مهلت ۱۵۰ ثانیه تمام شد · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}"
+                AppLogger.log("L2TP", "مهلت ۱۵۰ ثانیه تمام شد")
                 runCatching { VpnBridge.nativeStopTunnel() }
                 runCatching { stopSelf() }
             }
@@ -208,6 +218,13 @@ class TunnelVpnService : VpnService() {
         stopSelf()
     }
 
+    /** آزادسازی منابع بدون تغییر وضعیت (برای onDestroy). */
+    private fun releaseResources() {
+        runCatching { VpnBridge.nativeStopTunnel() }
+        closeTun()
+        worker = null
+    }
+
     private fun stopTunnel() {
         runCatching { VpnBridge.nativeStopTunnel() }
         closeTun()
@@ -222,6 +239,7 @@ class TunnelVpnService : VpnService() {
     }
 
     private fun fail(message: String) {
+        AppLogger.log("L2TP", "خطا: $message")
         if (stateFlow.value.first != STATE_FAILED) stateFlow.value = STATE_FAILED to message
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

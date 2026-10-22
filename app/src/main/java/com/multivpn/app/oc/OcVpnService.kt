@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.multivpn.app.log.AppLogger
 import org.infradead.libopenconnect.LibOpenConnect
 
 /** پارامترهای اتصال AnyConnect. */
@@ -57,6 +58,11 @@ class OcVpnService : VpnService() {
         /** (وضعیت، توضیح) برای نمایش در UI. */
         val state: StateFlow<Pair<String, String>> = stateFlow.asStateFlow()
 
+        /** پاک کردن خطای نمایش‌داده‌شده (وضعیت FAILED → IDLE). */
+        fun dismissError() {
+            if (stateFlow.value.first == STATE_FAILED) stateFlow.value = STATE_IDLE to ""
+        }
+
         @Volatile
         private var instance: OcVpnService? = null
 
@@ -85,12 +91,14 @@ class OcVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLogger.init(applicationContext)
         instance = this
         createChannel()
     }
 
     override fun onDestroy() {
-        stopAll()
+        // خطا را پاک نمی‌کنیم: وضعیت FAILED باید روی صفحه بماند
+        releaseResources()
         instance = null
         super.onDestroy()
     }
@@ -125,15 +133,26 @@ class OcVpnService : VpnService() {
     }
 
     private fun runTunnel(p: OcParams) {
+        AppLogger.log("OpenConnect", "اتصال به ${p.server}:${p.port} (کاربر ${p.user}) شروع شد")
+        // بارگذاری کتابخانه جداگانه: اگر نبود، پیام روشن به کاربر داده شود (نه کرش)
+        val loadError = runCatching { System.loadLibrary("openconnect") }.exceptionOrNull()
+        if (loadError != null) {
+            val msg = "کتابخانهٔ OpenConnect (libopenconnect.so) در این نسخه بارگذاری نشد: ${loadError.javaClass.name}: ${loadError.message}"
+            AppLogger.log("OpenConnect", msg)
+            stateFlow.value = STATE_FAILED to msg
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            stopSelf()
+            return
+        }
         var s: OcSession? = null
         val error: String? = try {
-            // هر خطای بارگذاری کتابخانه (مثلاً نبودن libopenconnect.so) باید اینجا گرفته شود، نه کرش برنامه
             s = OcSession(p) { fd -> instance?.protect(fd) ?: false }
             session = s
             tunnel(s, p)
         } catch (t: Throwable) {
             describeError(t)
         }
+        if (error != null) AppLogger.log("OpenConnect", error)
         closeTun()
         runCatching { s?.destroy() }
         session = null
@@ -192,6 +211,13 @@ class OcVpnService : VpnService() {
     private fun prefixOf(mask: String?): Int =
         mask?.split(".")?.mapNotNull { it.toIntOrNull() }?.takeIf { it.size == 4 }
             ?.sumOf { Integer.bitCount(it) } ?: 32
+
+    /** آزادسازی منابع بدون تغییر وضعیت (برای onDestroy). */
+    private fun releaseResources() {
+        runCatching { session?.cancel() }
+        closeTun()
+        worker = null
+    }
 
     private fun stopAll() {
         runCatching { session?.cancel() }

@@ -1,6 +1,7 @@
 package com.multivpn.app.oc
 
 import android.util.Log
+import com.multivpn.app.log.AppLogger
 import org.infradead.libopenconnect.LibOpenConnect
 
 private const val TAG = "OpenConnect"
@@ -19,6 +20,7 @@ class OcSession(
 
     override fun onProgress(level: Int, msg: String?) {
         Log.println(if (level == LibOpenConnect.PRG_ERR) Log.ERROR else Log.INFO, TAG, msg ?: "")
+            AppLogger.log("OpenConnect-engine", msg ?: "")
     }
 
     override fun onProtectSocket(fd: Int) {
