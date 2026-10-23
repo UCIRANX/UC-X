@@ -2439,6 +2439,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   memcpy(ike->skeyid_e, skeyid_e, sizeof(skeyid_e));
   ike->skeyid_e_len = sizeof(skeyid_e);
   ike->nat_t = use4500 ? 1 : 0;
+  // آخرین بلوک رمزشدهٔ MM5؛ برای ساخت IV پیام‌های INFORMATIONAL رمزشده (حذف SA) لازم است
+  memcpy(ike->iv_phase1, msg5_iv_out, 16);
 
   mbedtls_ctr_drbg_free(&ctr);
   mbedtls_entropy_free(&entropy);
@@ -2464,6 +2466,87 @@ fail_early:
 }
 
 /* --- Public entry: cleartext L2TP shortcut vs full IPsec negotiation --- */
+
+/**
+ * ارسال پیام حذف IKE (Delete با پروتکل ISAKMP) برای آزاد شدن SA روی سرور.
+ * فقط یک datagram می‌فرستد و منتظر پاسخ نمی‌ماند؛ شکست آن اتصال را خراب نمی‌کند.
+ * ساختار: هدر INFORMATIONAL (رمزشده) + HASH(1) + Delete(ISAKMP، SPI = icookie||rcookie).
+ */
+int ikev1_send_delete(const ike_session_t *ike) {
+  if (ike == NULL || ike->esp_fd < 0 || !ike->p1_aes || ike->skeyid_a_len != 20)
+    return -1;
+
+  // M-ID برای هر پیام تازه و غیرصفر است
+  static uint32_t s_mid = 0x5d000001u;
+  s_mid += 0x101u;
+  uint32_t mid = (s_mid == 0) ? 1u : s_mid;
+
+  // Delete payload: DOI=1 (IPSEC)، پروتکل=1 (ISAKMP)، اندازهٔ SPI=16، تعداد=1
+  uint8_t del[28];
+  memset(del, 0, sizeof(del));
+  del[0] = 0; // آخرین payload
+  util_write_be16(del + 2, 28);
+  util_write_be32(del + 4, 1u);
+  del[8] = 1;
+  del[9] = 16;
+  util_write_be16(del + 10, 1);
+  memcpy(del + 12, ike->icookie, 8);
+  memcpy(del + 20, ike->rcookie, 8);
+
+  // HASH(1) = prf(SKEYID_a, M-ID | Delete payload با هدر)  (RFC 2408 sec 3.15)
+  uint8_t hin[4 + 28];
+  util_write_be32(hin, mid);
+  memcpy(hin + 4, del, sizeof(del));
+  uint8_t h[20];
+  if (prf_hmac_sha1(ike->skeyid_a, 20, hin, sizeof(hin), h) != 0)
+    return -1;
+
+  // متن ساده: HASH (next=Delete=12) + Delete
+  uint8_t plain[24 + 28];
+  plain[0] = IKE_PT_DELETE;
+  plain[1] = 0;
+  util_write_be16(plain + 2, 24);
+  memcpy(plain + 4, h, 20);
+  memcpy(plain + 24, del, sizeof(del));
+
+  // IV و کلید AES مثل پیام‌های Informational دریافتی
+  uint8_t iv[16];
+  qm_first_iv_aes(ike->iv_phase1, mid, iv);
+  uint8_t key16[16];
+  if (derive_aes128_key(ike->skeyid_e, key16) != 0)
+    return -1;
+  uint8_t ct[128];
+  size_t ctl = 0;
+  if (isakmp_aes128_encrypt(key16, iv, plain, sizeof(plain), ct, &ctl) != 0 || ctl == 0 || ctl > sizeof(ct))
+    return -1;
+
+  // هدر ISAKMP: next=HASH(8)، نسخه=1.0، exchange=INFORMATIONAL، flags=ENC
+  uint8_t pkt[4 + 28 + sizeof(ct)];
+  size_t o = 0;
+  if (ike->nat_t) {
+    util_write_be32(pkt, 0u); // نشانگر non-ESP برای NAT-T
+    o = 4;
+  }
+  memcpy(pkt + o, ike->icookie, 8);
+  memcpy(pkt + o + 8, ike->rcookie, 8);
+  pkt[o + 16] = 8;
+  pkt[o + 17] = 0x10;
+  pkt[o + 18] = IKE_EXCH_INFO;
+  pkt[o + 19] = IKE_FLAG_ENC;
+  util_write_be32(pkt + o + 20, mid);
+  util_write_be32(pkt + o + 24, (uint32_t)(28 + ctl));
+  memcpy(pkt + o + 28, ct, ctl);
+  size_t total = o + 28 + ctl;
+
+  ssize_t ns = sendto(ike->esp_fd, pkt, total, 0, (const struct sockaddr *)&ike->peer, ike->peer_len);
+  if (ns < 0 || (size_t)ns != total) {
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE delete send failed ret=%zd want=%zu errno=%d", ns, total, errno);
+    return -1;
+  }
+  tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "IKE delete sent mid=%08x bytes=%zu nat_t=%d", (unsigned)mid, total,
+                    ike->nat_t ? 1 : 0);
+  return 0;
+}
 
 int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp) {
   /* Empty PSK = L2TP-only (no IPsec). */

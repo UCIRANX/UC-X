@@ -37,4 +37,10 @@ typedef struct {
  */
 int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp);
 
+/**
+ * Best-effort IKEv1 Delete (ISAKMP SA) so the server frees the IKE SA.
+ * Returns 0 when the datagram was sent. Requires AES phase 1 and a completed IKE SA.
+ */
+int ikev1_send_delete(const ike_session_t *ike);
+
 #endif

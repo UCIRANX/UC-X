@@ -233,6 +233,9 @@ static void tunnel_close_active_session(const char *reason, int send_l2tp_teardo
                         reason != NULL ? reason : "unknown");
     }
   }
+  // حذف IKE SA روی سرور (بهترین تلاش)؛ وگرنه نشست کهنه روی سرور می‌ماند و تلاش بعدی شکست می‌خورد
+  (void)ikev1_send_delete(&g_state.ike);
+  g_state.ike.skeyid_a_len = 0;
   close(g_state.ike.esp_fd);
   g_state.ike.esp_fd = -1;
   g_state.ready = 0;
