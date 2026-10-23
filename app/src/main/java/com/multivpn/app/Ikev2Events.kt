@@ -1,5 +1,6 @@
 package com.multivpn.app
 
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -25,7 +26,9 @@ object Ikev2Events {
     const val FAILED = "failed"
 
     /** مهلت انتظار برای برقراری شبکهٔ VPN پس از شروع. */
-    private const val TIMEOUT_MS = 30_000L
+    private const val TIMEOUT_MS = 60_000L
+    private const val CHANNEL_ID = "ikev2_vpn"
+    private const val NOTIFICATION_ID = 2301
     private const val CATEGORY_NETWORK_ERROR = "android.net.category.EVENT_NETWORK_ERROR"
 
     private val flow = MutableStateFlow(IDLE to "")
@@ -37,6 +40,7 @@ object Ikev2Events {
     private var timeout: Runnable? = null
     private var registered = false
     private var attempt = 0
+    private var appCtx: Context? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
@@ -52,6 +56,7 @@ object Ikev2Events {
 
     /** ثبت گیرندهٔ رویدادها؛ چندبار صدا زدن بی‌اثر است. */
     fun register(ctx: Context) {
+        appCtx = ctx.applicationContext
         if (registered) return
         val filter = IntentFilter(VpnManager.ACTION_VPN_MANAGER_EVENT)
         filter.addCategory(VpnManager.CATEGORY_EVENT_IKE_ERROR)
@@ -72,6 +77,7 @@ object Ikev2Events {
         val mine = attempt
         flow.value = CONNECTING to ""
         AppLogger.log("IKEv2", "وضعیت: در حال اتصال (تلاش $mine)")
+        show("IKEv2 · در حال اتصال…", "منتظر برقراری شبکهٔ VPN", true)
         cancelTimeout()
         val r = Runnable {
             if (attempt == mine && flow.value.first == CONNECTING) {
@@ -86,24 +92,40 @@ object Ikev2Events {
         cancelTimeout()
         flow.value = CONNECTED to ""
         AppLogger.log("IKEv2", "وضعیت: متصل")
+        show("IKEv2 · متصل", "شبکهٔ VPN فعال است", true)
     }
 
     fun onNetworkDown() {
         if (flow.value.first == CONNECTED) {
             flow.value = IDLE to ""
             AppLogger.log("IKEv2", "وضعیت: قطع")
+            cancelNotice()
         }
     }
 
     fun onStopped() {
         cancelTimeout()
         flow.value = IDLE to ""
+        cancelNotice()
     }
 
     fun fail(message: String) {
         cancelTimeout()
         flow.value = FAILED to message
         AppLogger.log("IKEv2", "خطا: $message")
+        show("IKEv2 · ناموفق", message, false)
+    }
+
+    /** نوتیفیکیشن وضعیت IKEv2 (سیستم خودش نوتیفیکیشن برنامه نمی‌سازد). */
+    private fun show(title: String, text: String, ongoing: Boolean) {
+        val c = appCtx ?: return
+        VpnNotify.channel(c, CHANNEL_ID, "IKEv2")
+        val n = VpnNotify.build(c, CHANNEL_ID, title, text, emptyList(), ongoing, VpnNotify.openAppIntent(c, 30))
+        c.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, n)
+    }
+
+    private fun cancelNotice() {
+        appCtx?.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
     }
 
     private fun cancelTimeout() {

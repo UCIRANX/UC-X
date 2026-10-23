@@ -42,7 +42,7 @@ class TunnelVpnService : VpnService() {
 
         private const val CONNECT_TIMEOUT_MS = 240_000L
         private const val MAX_ATTEMPTS = 3
-        private const val RETRY_PAUSE_MS = 4_000L
+        private const val RETRY_PAUSE_MS = 12_000L
         private const val CHANNEL_ID = "l2tp_vpn"
         private const val NOTIFICATION_ID = 2101
         private const val NOTIFICATION_PAUSED_ID = 2102
