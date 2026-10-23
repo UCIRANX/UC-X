@@ -224,6 +224,7 @@ fun ProtocolScreen() {
 
     val ikev2Launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val s = findServer(pendingKey)
+        AppLogger.log("IKEv2", "نتیجهٔ تأیید سیستم: ${if (res.resultCode == Activity.RESULT_OK) "تأیید شد" else "رد شد یا لغو شد"}")
         note = if (res.resultCode == Activity.RESULT_OK && s != null) {
             startIkev2(context, s.toIkev2()) ?: ""
         } else {
@@ -246,6 +247,7 @@ fun ProtocolScreen() {
             return
         }
         pendingKey = s.key
+        AppLogger.log("UI", "درخواست اتصال به ${s.label} (${s.type.label})")
         if (s.type == VpnType.IKEV2) {
             if (!ikev2Supported) {
                 note = "IKEv2 فقط روی اندروید ۱۲ به بالا کار می‌کند"

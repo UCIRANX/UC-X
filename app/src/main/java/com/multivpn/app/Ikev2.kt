@@ -11,6 +11,7 @@ import android.net.VpnManager
 import android.net.eap.EapSessionConfig
 import android.net.ipsec.ike.ChildSaProposal
 import android.net.ipsec.ike.IkeFqdnIdentification
+import com.multivpn.app.log.AppLogger
 import android.net.ipsec.ike.IkeSaProposal
 import android.net.ipsec.ike.IkeSessionParams
 import android.net.ipsec.ike.IkeTunnelConnectionParams
@@ -98,6 +99,27 @@ private fun vpnManager(ctx: Context): VpnManager = ctx.getSystemService(VpnManag
  */
 @RequiresApi(Build.VERSION_CODES.S)
 fun ikev2ConsentIntent(ctx: Context, s: Ikev2Server): Intent? {
+    AppLogger.log(
+        "IKEv2",
+        "شروع: سرور=${s.server} کاربر=${s.username.ifBlank { "-" }} روش=${if (s.psk.isNotBlank()) "PSK" else "EAP"} شناسه‌سرور=${s.remoteId.ifBlank { "-" }}",
+    )
+    return try {
+        ikev2ConsentIntentInner(ctx, s).also {
+            AppLogger.log("IKEv2", if (it == null) "پروفایل آماده است (بدون نیاز به تأیید)" else "پروفایل ساخته شد؛ تأیید سیستم لازم است")
+        }
+    } catch (e: Throwable) {
+        AppLogger.log("IKEv2", "خطا در ساخت پروفایل: ${errorChain(e)}")
+        throw e
+    }
+}
+
+/** زنجیرهٔ علت خطا (تا سه سطح) برای لاگ. */
+fun errorChain(t: Throwable): String =
+    generateSequence(t) { it.cause }.take(3).joinToString(" ← ") {
+        "${it.javaClass.name}${it.message?.let { m -> ": $m" } ?: ""}"
+    }
+
+private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
     // پیشنهادهای IKE با addIkeSaProposal (نام API در اندروید ۱۲ به بعد)؛ بدون آن build() شکست می‌خورد
     val ike = IkeSessionParams.Builder()
         .setServerHostname(s.server)
@@ -141,6 +163,11 @@ fun ikev2ConsentIntent(ctx: Context, s: Ikev2Server): Intent? {
                 .build()
         )
         .build()
+    // هویت محلی لازم است؛ برای EAP نام کاربری استفاده می‌شود (بدون آن پیام Necessary parameter missing می‌آید)
+    val localId = s.username.trim()
+    if (localId.isNotEmpty()) {
+        ike.setLocalIdentification(IkeFqdnIdentification(localId))
+    }
     val params = IkeTunnelConnectionParams(ike.build(), child)
     val profile = Ikev2VpnProfile.Builder(params).build()
     return vpnManager(ctx).provisionVpnProfile(profile)
@@ -150,18 +177,22 @@ fun ikev2ConsentIntent(ctx: Context, s: Ikev2Server): Intent? {
 fun startIkev2(ctx: Context, s: Ikev2Server?): String? {
     if (s == null) return "ابتدا یک سرور انتخاب کنید"
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "IKEv2 فقط روی اندروید ۱۲ به بالا کار می‌کند"
+    AppLogger.log("IKEv2", "درخواست شروع اتصال پروفایل ثبت‌شده")
     return try {
         stopOthersForIkev2(ctx)
         vpnManager(ctx).startProvisionedVpnProfile()
         Ikev2Store.setActive(ctx, true)
+        AppLogger.log("IKEv2", "startProvisionedVpnProfile فراخوانی شد")
         null
     } catch (e: Exception) {
+        AppLogger.log("IKEv2", "شروع اتصال ناموفق: ${errorChain(e)}")
         "اتصال IKEv2 شروع نشد: ${e.message}"
     }
 }
 
 /** قطع: حذف پروفایل ثبت‌شده (سیستم اتصال را می‌بندد). */
 fun stopIkev2(ctx: Context) {
+    AppLogger.log("IKEv2", "قطع اتصال (حذف پروفایل ثبت‌شده)")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         runCatching { vpnManager(ctx).deleteProvisionedVpnProfile() }
     }
@@ -187,10 +218,12 @@ fun watchVpn(ctx: Context, onChange: (Boolean) -> Unit): ConnectivityManager.Net
     val request = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_VPN).build()
     val cb = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
+            AppLogger.log("IKEv2", "شبکهٔ VPN فعال شد")
             onChange(true)
         }
 
         override fun onLost(network: Network) {
+            AppLogger.log("IKEv2", "شبکهٔ VPN قطع شد")
             onChange(false)
         }
     }
