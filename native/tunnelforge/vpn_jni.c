@@ -397,6 +397,14 @@ static void native_stop_tunnel(JNIEnv *env, jclass clazz) {
   tunnel_loop_stop();
 }
 
+extern void ikev1_set_keymat_variant(int variant);
+
+static void native_set_keymat_variant(JNIEnv *env, jclass clazz, jint variant) {
+  (void)env;
+  (void)clazz;
+  ikev1_set_keymat_variant((int)variant);
+}
+
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
       {"nativeRunTunnel", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I",
@@ -404,6 +412,7 @@ static int register_vpn_bridge(JNIEnv *env) {
       {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I[I[I[I)I",
        (void *)native_negotiate},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},
+      {"nativeSetKeymatVariant", "(I)V", (void *)native_set_keymat_variant},
       {"nativeStartLoop", "(I)I", (void *)native_start_loop},
       {"nativeStartProxyLoop", "()I", (void *)native_start_proxy_loop},
       {"nativeGvisorStart", "([II)I", (void *)native_gvisor_start},

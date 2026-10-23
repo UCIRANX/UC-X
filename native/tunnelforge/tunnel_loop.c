@@ -284,11 +284,11 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
                      &g_state.l2tp) != 0) {
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "tunnel negotiate canceled during L2TP");
-      tunnel_close_active_session("canceled during L2TP", 0);
+      tunnel_close_active_session("canceled during L2TP", 1);
       return TUNNEL_EXIT_STOPPED;
     }
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "L2TP handshake failed");
-    tunnel_close_active_session("L2TP handshake failed", 0);
+    tunnel_close_active_session("L2TP handshake failed", 1);
     return TUNNEL_EXIT_L2TP_FAILED;
   }
 

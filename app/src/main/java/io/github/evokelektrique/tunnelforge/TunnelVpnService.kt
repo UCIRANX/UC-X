@@ -200,6 +200,9 @@ class TunnelVpnService : VpnService() {
             negotiated = try {
                 // هر تلاش با کوکی‌ها و نشست IKE تازه شروع می‌شود
                 VpnBridge.nativeSetSocketProtectionEnabled(true)
+                val kv = keymatVariantFor(server, attempt)
+                VpnBridge.nativeSetKeymatVariant(kv)
+                AppLogger.log("L2TP", "نسخهٔ کلید IPsec برای این تلاش: ${if (kv == 1) "A" else if (kv == 2) "B" else "C"}")
                 VpnBridge.nativeNegotiate(server, user, password, psk, mtu, clientIp, dns1, dns2)
             } catch (t: Throwable) {
                 AppLogger.log("L2TP", "موتور اجرا نشد: ${t.message ?: t.javaClass.simpleName}")
@@ -228,6 +231,7 @@ class TunnelVpnService : VpnService() {
             return
         }
         AppLogger.log("L2TP", "اتصال در تلاش $usedAttempt از $MAX_ATTEMPTS برقرار شد")
+        rememberKeymat(server, keymatVariantFor(server, usedAttempt))
 
         // مرحلهٔ ۲: ساخت رابط TUN با IP و DNS که سرور داده است
         val pfd = try {
@@ -315,6 +319,16 @@ class TunnelVpnService : VpnService() {
         if (stateFlow.value.first != STATE_FAILED) stateFlow.value = STATE_FAILED to message
         runCatching { stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE) }
         stopSelf()
+    }
+
+    /** نسخهٔ کلید برای این تلاش: از نسخهٔ موفق قبلی همین سرور شروع می‌شود و در هر تلاش به نسخهٔ بعدی می‌رود. */
+    private fun keymatVariantFor(server: String, attempt: Int): Int {
+        val base = getSharedPreferences("L2TP_KEYMAT", MODE_PRIVATE).getInt(server, 1).coerceIn(1, 3)
+        return ((base - 1 + attempt - 1) % 3) + 1
+    }
+
+    private fun rememberKeymat(server: String, variant: Int) {
+        getSharedPreferences("L2TP_KEYMAT", MODE_PRIVATE).edit().putInt(server, variant).apply()
     }
 
     /** آمار موفقیت هر سرور در لاگ تا روند مشکل دیده شود. */

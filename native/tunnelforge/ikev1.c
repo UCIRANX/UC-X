@@ -35,6 +35,14 @@ static unsigned s_ike_keymat_variants_log_once;
 #define TUNNEL_FORGE_KEYMAT_VARIANT 1
 #endif
 
+/* نسخهٔ کلید IPsec در زمان اجرا (1=A، 2=B، 3=C). Kotlin قبل از هر تلاش آن را تنظیم می‌کند. */
+static int s_keymat_variant = TUNNEL_FORGE_KEYMAT_VARIANT;
+
+void ikev1_set_keymat_variant(int variant) {
+  if (variant >= 1 && variant <= 3)
+    s_keymat_variant = variant;
+}
+
 // IKE DH group 14 (MODP2048): must match Phase 1 proposal and mbedtls_mpi_read_binary below.
 #define IKE_DH_PUBKEY_BYTES 256
 
@@ -2340,7 +2348,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   const uint8_t *keymat_r = keymat_a_r;
   const char *keymat_variant = "A";
   enum { KEYMAT_VARIANT_A = 1, KEYMAT_VARIANT_B = 2, KEYMAT_VARIANT_C = 3 };
-  const int active_keymat_variant = TUNNEL_FORGE_KEYMAT_VARIANT;
+  const int active_keymat_variant = s_keymat_variant;
   if (active_keymat_variant == KEYMAT_VARIANT_B) {
     keymat_i = keymat_b_i;
     keymat_r = keymat_b_r;

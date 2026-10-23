@@ -30,6 +30,8 @@ object VpnBridge {
     @JvmStatic
     external fun nativeSetSocketProtectionEnabled(enabled: Boolean)
 
+    external fun nativeSetKeymatVariant(variant: Int)
+
     @JvmStatic
     external fun nativeStartLoop(tunFd: Int): Int
 

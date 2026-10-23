@@ -133,6 +133,22 @@ private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
         )
         .addIkeSaProposal(
             IkeSaProposal.Builder()
+                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_128)
+                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
+                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
+                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
+                .build()
+        )
+        .addIkeSaProposal(
+            IkeSaProposal.Builder()
+                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_128)
+                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_NONE)
+                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
+                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
+                .build()
+        )
+        .addIkeSaProposal(
+            IkeSaProposal.Builder()
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_256)
                 .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_NONE)
                 .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
