@@ -194,7 +194,10 @@ fun ProtocolScreen() {
     val ocConnected = ocState.first == OcVpnService.STATE_CONNECTED
     val ocBusy = ocState.first == OcVpnService.STATE_CONNECTING
     val connectedAny = ikev2Connected || l2tpConnected || ocConnected
-    val busyAny = l2tpBusy || ocBusy
+    val ikev2Status by Ikev2Events.status.collectAsState()
+    val ikev2Connecting = ikev2Status.first == Ikev2Events.CONNECTING
+    val ikev2Failed = ikev2Status.first == Ikev2Events.FAILED
+    val busyAny = l2tpBusy || ocBusy || ikev2Connecting
     val anyActive = connectedAny || busyAny
 
     // پیام‌های موقت (مثل «قطع شد») با تغییر واقعی وضعیت پاک می‌شوند
@@ -272,7 +275,7 @@ fun ProtocolScreen() {
     }
 
     fun disconnectAll() {
-        if (ikev2Connected) stopIkev2(context)
+        if (ikev2Connected || ikev2Connecting) stopIkev2(context)
         if (TunnelVpnService.state.value.first != TunnelVpnService.STATE_IDLE) {
             context.startService(TunnelVpnService.disconnectIntent(context))
         }
@@ -285,7 +288,7 @@ fun ProtocolScreen() {
     fun liveActive(): Boolean {
         val l = TunnelVpnService.state.value.first
         val o = OcVpnService.state.value.first
-        return ikev2Connected ||
+        return ikev2Connected || Ikev2Events.status.value.first == Ikev2Events.CONNECTING ||
             l == TunnelVpnService.STATE_CONNECTED || l == TunnelVpnService.STATE_CONNECTING ||
             o == OcVpnService.STATE_CONNECTED || o == OcVpnService.STATE_CONNECTING
     }
@@ -310,6 +313,7 @@ fun ProtocolScreen() {
     // ───── کارت خطا: خلاصه‌ی کوتاه؛ جزئیات در پنجرهٔ لاگ ─────
     // خطای قدیمی یک پروتکل وقتی اتصالی فعال است نشان داده نمی‌شود
     val errorDetail: String? = if (anyActive) null else when {
+        ikev2Failed -> "IKEv2: ${ikev2Status.second}"
         l2tpState.first == TunnelVpnService.STATE_FAILED -> "L2TP: ${l2tpState.second}"
         ocState.first == OcVpnService.STATE_FAILED -> "OpenConnect: ${ocState.second}"
         else -> null
@@ -317,6 +321,7 @@ fun ProtocolScreen() {
 
     val statusText = when {
         ikev2Connected -> "متصل · IKEv2"
+        ikev2Connecting -> "در حال اتصال… · IKEv2"
         l2tpConnected -> "متصل · L2TP/IPsec"
         ocConnected -> "متصل · OpenConnect"
         l2tpState.first == TunnelVpnService.STATE_PAUSED || ocState.first == OcVpnService.STATE_PAUSED -> "متوقف موقت"

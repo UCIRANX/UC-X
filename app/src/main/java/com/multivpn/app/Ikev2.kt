@@ -183,6 +183,9 @@ fun startIkev2(ctx: Context, s: Ikev2Server?): String? {
         vpnManager(ctx).startProvisionedVpnProfile()
         Ikev2Store.setActive(ctx, true)
         AppLogger.log("IKEv2", "startProvisionedVpnProfile فراخوانی شد")
+        Ikev2Events.register(ctx)
+        Ikev2Events.onStarted()
+        runCatching { AppLogger.log("IKEv2", "وضعیت پروفایل سیستم: ${vpnManager(ctx).getProvisionedVpnProfileState()}") }
         null
     } catch (e: Exception) {
         AppLogger.log("IKEv2", "شروع اتصال ناموفق: ${errorChain(e)}")
@@ -193,6 +196,7 @@ fun startIkev2(ctx: Context, s: Ikev2Server?): String? {
 /** قطع: حذف پروفایل ثبت‌شده (سیستم اتصال را می‌بندد). */
 fun stopIkev2(ctx: Context) {
     AppLogger.log("IKEv2", "قطع اتصال (حذف پروفایل ثبت‌شده)")
+    Ikev2Events.onStopped()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         runCatching { vpnManager(ctx).deleteProvisionedVpnProfile() }
     }
@@ -219,11 +223,13 @@ fun watchVpn(ctx: Context, onChange: (Boolean) -> Unit): ConnectivityManager.Net
     val cb = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             AppLogger.log("IKEv2", "شبکهٔ VPN فعال شد")
+            Ikev2Events.onNetworkUp()
             onChange(true)
         }
 
         override fun onLost(network: Network) {
             AppLogger.log("IKEv2", "شبکهٔ VPN قطع شد")
+            Ikev2Events.onNetworkDown()
             onChange(false)
         }
     }
