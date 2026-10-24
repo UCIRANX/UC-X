@@ -183,15 +183,8 @@ fun ProtocolScreen() {
     var lastUpd by remember { mutableStateOf(ProtoLists.lastUpdated(context)) }
 
     // ───── وضعیت واقعی هر پروتکل ─────
-    var ikev2Connected by remember { mutableStateOf(false) }
-    DisposableEffect(ikev2Supported) {
-        if (!ikev2Supported) {
-            onDispose { }
-        } else {
-            val cb = watchVpn(context) { ikev2Connected = it }
-            onDispose { unwatchVpn(context, cb) }
-        }
-    }
+    val ikev2Status by Ikev2Events.status.collectAsState()
+    val ikev2Connected = ikev2Status.first == Ikev2Events.CONNECTED
     val l2tpState by TunnelVpnService.state.collectAsState()
     val ocState by OcVpnService.state.collectAsState()
     val l2tpConnected = l2tpState.first == TunnelVpnService.STATE_CONNECTED
@@ -199,7 +192,6 @@ fun ProtocolScreen() {
     val ocConnected = ocState.first == OcVpnService.STATE_CONNECTED
     val ocBusy = ocState.first == OcVpnService.STATE_CONNECTING
     val connectedAny = ikev2Connected || l2tpConnected || ocConnected
-    val ikev2Status by Ikev2Events.status.collectAsState()
     val ikev2Connecting = ikev2Status.first == Ikev2Events.CONNECTING
     val ikev2Failed = ikev2Status.first == Ikev2Events.FAILED
     val busyAny = l2tpBusy || ocBusy || ikev2Connecting

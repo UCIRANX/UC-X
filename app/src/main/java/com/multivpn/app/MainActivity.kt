@@ -100,6 +100,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleOpenIntent(i: Intent?) {
+        if (i?.getBooleanExtra(Ikev2Events.EXTRA_DISCONNECT, false) == true) {
+            i.removeExtra(Ikev2Events.EXTRA_DISCONNECT)
+            stopIkev2(this)
+        }
         val m = i?.getStringExtra("open_mode")
         if (m == "SSTP" || m == "PROTO") ModeRequest.requested = m
     }

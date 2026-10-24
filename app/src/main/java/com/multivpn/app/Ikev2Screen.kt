@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -65,7 +66,8 @@ fun Ikev2Screen() {
     var list by remember { mutableStateOf(Ikev2Store.load(context)) }
     var selectedKey by rememberSaveable { mutableStateOf(Ikev2Store.selected(context)) }
     var pendingKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var connected by remember { mutableStateOf(false) }
+    val ikev2Status by Ikev2Events.status.collectAsState()
+    val connected = ikev2Status.first == Ikev2Events.CONNECTED
     var note by rememberSaveable { mutableStateOf("") }
     var showManual by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Ikev2Server?>(null) }
@@ -75,14 +77,6 @@ fun Ikev2Screen() {
         Ikev2Store.setSelected(context, key)
     }
 
-    DisposableEffect(supported) {
-        if (!supported) {
-            onDispose { }
-        } else {
-            val cb = watchVpn(context) { connected = it }
-            onDispose { unwatchVpn(context, cb) }
-        }
-    }
 
     val consentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()

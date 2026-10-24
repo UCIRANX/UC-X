@@ -1,6 +1,7 @@
 package com.multivpn.app
 
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import android.net.VpnManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import androidx.core.content.ContextCompat
 import com.multivpn.app.log.AppLogger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +31,9 @@ object Ikev2Events {
     const val CONNECTED = "connected"
     const val FAILED = "failed"
 
+    /** extra اکشن «قطع کامل» از نوتیفیکیشن که MainActivity آن را می‌خواند. */
+    const val EXTRA_DISCONNECT = "ikev2_disconnect"
+
     /** مهلت انتظار برای برقراری شبکهٔ VPN پس از شروع. */
     private const val TIMEOUT_MS = 60_000L
     /** فاصلهٔ بررسی دوره‌ای وجود شبکهٔ VPN در حین اتصال. */
@@ -45,6 +50,7 @@ object Ikev2Events {
     private val main = Handler(Looper.getMainLooper())
     private var timeout: Runnable? = null
     private var poller: Runnable? = null
+    private var speedTick: Runnable? = null
     private var vpnCb: ConnectivityManager.NetworkCallback? = null
     private var defaultCb: ConnectivityManager.NetworkCallback? = null
     private var registered = false
@@ -175,9 +181,11 @@ object Ikev2Events {
         flow.value = CONNECTED to ""
         AppLogger.log("IKEv2", "وضعیت: متصل")
         show("IKEv2 · متصل", "شبکهٔ VPN فعال است", true)
+        startSpeed()
     }
 
     fun onNetworkDown() {
+        stopSpeed()
         if (flow.value.first == CONNECTED) {
             flow.value = IDLE to ""
             AppLogger.log("IKEv2", "وضعیت: قطع")
@@ -187,6 +195,7 @@ object Ikev2Events {
 
     fun onStopped() {
         cancelTimeout()
+        stopSpeed()
         stopWatch()
         flow.value = IDLE to ""
         cancelNotice()
@@ -200,11 +209,49 @@ object Ikev2Events {
         cancelNotice()
     }
 
-    /** نوتیفیکیشن وضعیت IKEv2. */
+    /** سرعت لحظه‌ای (مثل OpenConnect) در عنوان نوشته می‌شود؛ فقط وقتی متصل است. */
+    private fun startSpeed() {
+        stopSpeed()
+        if (appCtx == null) return
+        val uid = Process.myUid()
+        var prev = VpnNotify.counters(uid)
+        val r = object : Runnable {
+            override fun run() {
+                if (flow.value.first != CONNECTED) return
+                val cur = VpnNotify.counters(uid)
+                val down = (cur.first - prev.first).coerceAtLeast(0L)
+                val up = (cur.second - prev.second).coerceAtLeast(0L)
+                prev = cur
+                show("↓ ${VpnNotify.speedText(down)}   ↑ ${VpnNotify.speedText(up)}", "IKEv2 · متصل", true)
+                main.postDelayed(this, 1_000L)
+            }
+        }
+        speedTick = r
+        main.postDelayed(r, 1_000L)
+    }
+
+    private fun stopSpeed() {
+        speedTick?.let { main.removeCallbacks(it) }
+        speedTick = null
+    }
+
+    /** نوتیفیکیشن IKEv2 با همان ساختار OpenConnect: عنوان، متن و دکمه‌ی «قطع کامل». */
     private fun show(title: String, text: String, ongoing: Boolean) {
         val c = appCtx ?: return
         VpnNotify.channel(c, CHANNEL_ID, "IKEv2")
-        val n = VpnNotify.build(c, CHANNEL_ID, title, text, emptyList(), ongoing, VpnNotify.openAppIntent(c, 30))
+        val disconnect = PendingIntent.getActivity(
+            c,
+            40,
+            Intent(c, MainActivity::class.java)
+                .putExtra(EXTRA_DISCONNECT, true)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = VpnNotify.build(
+            c, CHANNEL_ID, title, text,
+            listOf("قطع کامل" to disconnect),
+            ongoing, VpnNotify.openAppIntent(c, 30),
+        )
         c.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, n)
     }
 
