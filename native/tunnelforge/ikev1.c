@@ -443,7 +443,7 @@ static int ike_is_duplicate_qm2_retransmit(int p1_aes, const uint8_t *aeskey, co
 static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *qm3_pkt,
                                     size_t qm3_len, uint8_t *in, size_t in_cap, int prefix4500, uint32_t qm_mid,
                                     int p1_aes, const uint8_t *aeskey, const uint8_t *deskey, const uint8_t *qm1_tail) {
-  const int total_ms = 16000;
+  const int total_ms = 800;
   const int slice_ms = 400;
   int elapsed = 0;
   int resend_count = 0;
