@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.VpnManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
@@ -58,17 +59,32 @@ object Ikev2Events {
     fun register(ctx: Context) {
         appCtx = ctx.applicationContext
         if (registered) return
-        val filter = IntentFilter(VpnManager.ACTION_VPN_MANAGER_EVENT)
-        filter.addCategory(VpnManager.CATEGORY_EVENT_IKE_ERROR)
-        filter.addCategory(CATEGORY_NETWORK_ERROR)
-        ContextCompat.registerReceiver(
-            ctx.applicationContext,
-            receiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        registered = true
-        AppLogger.log("IKEv2", "گیرندهٔ رویدادهای سیستم ثبت شد")
+        val filter = IntentFilter(VpnManager.ACTION_VPN_MANAGER_EVENT).apply {
+            addCategory(VpnManager.CATEGORY_EVENT_IKE_ERROR)
+            addCategory(CATEGORY_NETWORK_ERROR)
+            addCategory("android.net.category.EVENT_DEACTIVATED_BY_USER")
+            addCategory("android.net.category.EVENT_ALWAYS_ON_STATE_CHANGED")
+        }
+        
+        // اصلاح پرچم ثبت BroadcastReceiver جهت سازگاری کامل با اندروید ۱۲ به بالا
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Context.RECEIVER_EXPORTED
+        } else {
+            0
+        }
+
+        runCatching {
+            ContextCompat.registerReceiver(
+                ctx.applicationContext,
+                receiver,
+                filter,
+                flags
+            )
+            registered = true
+            AppLogger.log("IKEv2", "گیرندهٔ رویدادهای سیستم با موفقیت ثبت شد")
+        }.onFailure { e ->
+            AppLogger.log("IKEv2", "خطا در ثبت گیرنده رویداد: ${e.message}")
+        }
     }
 
     /** بعد از درخواست شروع: وضعیت در حال اتصال و مهلت انتظار برای شبکه. */
@@ -111,14 +127,13 @@ object Ikev2Events {
 
     fun fail(message: String) {
         cancelTimeout()
-        // حذف پروفایل سیستمی تا روی بخش‌های دیگر (مثل L2TP) اثر نگذارد؛ onStopped وضعیت را IDLE می‌کند
         appCtx?.let { stopIkev2(it) }
         flow.value = FAILED to message
         AppLogger.log("IKEv2", "خطا: $message")
         cancelNotice()
     }
 
-    /** نوتیفیکیشن وضعیت IKEv2 (سیستم خودش نوتیفیکیشن برنامه نمی‌سازد). */
+    /** نوتیفیکیشن وضعیت IKEv2. */
     private fun show(title: String, text: String, ongoing: Boolean) {
         val c = appCtx ?: return
         VpnNotify.channel(c, CHANNEL_ID, "IKEv2")
