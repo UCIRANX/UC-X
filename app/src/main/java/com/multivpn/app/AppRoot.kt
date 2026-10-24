@@ -116,6 +116,7 @@ fun AppRoot(onGuardConnect: () -> Unit = {}) {
 
     LaunchedEffect(torPhase) {
         if (torPhase == Phase.CONNECTING) {
+            VpnSwitch.stopOthers(context, "TOR")
             SingBoxController.stop(context, "سینگ باکس برای اتصال تور قطع شد")
             stopGuardIfActive(context)
             stopSstpIfActive(context)

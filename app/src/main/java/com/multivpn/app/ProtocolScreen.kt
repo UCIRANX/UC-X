@@ -74,6 +74,9 @@ import com.multivpn.app.oc.OcParams
 import com.multivpn.app.oc.OcVpnService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private val PTextMain = Color(0xFFEDEDF5)
 private val PTextSub = Color(0xFFB4B4C8)
@@ -130,6 +133,7 @@ private fun ProtoServer.toIkev2() = Ikev2Server(name, host, user, password, remo
 
 /** شروع L2TP یا OpenConnect؛ VPNهای دیگر قبلاً قطع می‌شوند. */
 private fun startServer(context: Context, s: ProtoServer) {
+    VpnSwitch.stopOthers(context, "PLUS")
     stopOthersForIkev2(context)
     stopIkev2IfActive(context)
     AppLogger.init(context)
@@ -176,6 +180,7 @@ fun ProtocolScreen() {
     var dialogType by rememberSaveable { mutableStateOf(VpnType.IKEV2) }
     var editing by remember { mutableStateOf<ProtoServer?>(null) }
     var updating by remember { mutableStateOf(false) }
+    var lastUpd by remember { mutableStateOf(ProtoLists.lastUpdated(context)) }
 
     // ───── وضعیت واقعی هر پروتکل ─────
     var ikev2Connected by remember { mutableStateOf(false) }
@@ -209,6 +214,7 @@ fun ProtocolScreen() {
             note = ProtoLists.refreshSub(context)
             subList = ProtoLists.loadSub(context)
             favSub = ProtoLists.favSub(context)
+            lastUpd = ProtoLists.lastUpdated(context)
         }
     }
 
@@ -338,8 +344,9 @@ fun ProtocolScreen() {
     val header: @Composable () -> Unit = {
         Box(
             modifier = Modifier
-                .size(if (landscape) 84.dp else 96.dp)
-                .background(Brush.radialGradient(listOf(accent.copy(alpha = 0.95f), accent.copy(alpha = 0.3f))), CircleShape)
+                .fillMaxWidth(if (landscape) 0.9f else 0.8f)
+                .height(if (landscape) 52.dp else 58.dp)
+                .background(Brush.radialGradient(listOf(accent.copy(alpha = 0.95f), accent.copy(alpha = 0.3f))), RoundedCornerShape(16.dp))
                 .clickable { if (anyActive) disconnectAll() else connectSelected() },
             contentAlignment = Alignment.Center,
         ) {
@@ -436,7 +443,11 @@ fun ProtocolScreen() {
     }
 
     val actions: @Composable () -> Unit = {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             OutlinedButton(
                 onClick = {
                     updating = true
@@ -444,26 +455,31 @@ fun ProtocolScreen() {
                         note = ProtoLists.refreshSub(context)
                         subList = ProtoLists.loadSub(context)
                         favSub = ProtoLists.favSub(context)
+                        lastUpd = ProtoLists.lastUpdated(context)
                         updating = false
                     }
                 },
                 enabled = !updating,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1.3f),
             ) {
                 Text("بروزرسانی", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
-            OutlinedButton(
-                onClick = { showChooser = true },
-                modifier = Modifier.weight(1f),
-            ) {
+            OutlinedButton(onClick = { showChooser = true }, modifier = Modifier.weight(1.3f)) {
                 Text("افزودن سرور دستی", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
+            OutlinedButton(onClick = { showLog = true }, modifier = Modifier.weight(0.9f)) {
+                Text("لاگ برنامه", color = PTextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
         }
-        OutlinedButton(onClick = { showLog = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("لاگ برنامه", color = PTextMain, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
+        Text(
+            "آخرین بروزرسانی: ${fmtTime(lastUpd)}",
+            color = PTextSub,
+            fontSize = 9.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
-
     if (landscape) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 4.dp),
@@ -748,3 +764,7 @@ private fun EntryDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } },
     )
 }
+
+/** زمان آخرین بروزرسانی ساب‌لینک به‌صورت کوتاه؛ ۰ یعنی هنوز بروزرسانی نشده. */
+private fun fmtTime(ms: Long): String =
+    if (ms == 0L) "هرگز" else SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(ms))

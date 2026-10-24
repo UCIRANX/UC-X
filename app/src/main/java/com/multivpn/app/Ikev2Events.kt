@@ -111,9 +111,11 @@ object Ikev2Events {
 
     fun fail(message: String) {
         cancelTimeout()
+        // حذف پروفایل سیستمی تا روی بخش‌های دیگر (مثل L2TP) اثر نگذارد؛ onStopped وضعیت را IDLE می‌کند
+        appCtx?.let { stopIkev2(it) }
         flow.value = FAILED to message
         AppLogger.log("IKEv2", "خطا: $message")
-        show("IKEv2 · ناموفق", message, false)
+        cancelNotice()
     }
 
     /** نوتیفیکیشن وضعیت IKEv2 (سیستم خودش نوتیفیکیشن برنامه نمی‌سازد). */

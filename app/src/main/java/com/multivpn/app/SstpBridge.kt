@@ -41,6 +41,7 @@ fun stopOthersForSstp(ctx: Context) {
 
 /** اتصال به یک سرور SSTP: نوشتن تنظیمات موتور، قطع VPNهای دیگر، و شروع سرویس. */
 fun connectSstpServer(ctx: Context, s: SstpServer) {
+    VpnSwitch.stopOthers(ctx, "SSTP")
     val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
     kittoku.osc.preference.accessor.setStringPrefValue(s.host, kittoku.osc.preference.OscPrefKey.HOME_HOSTNAME, prefs)
     kittoku.osc.preference.accessor.setIntPrefValue(s.port, kittoku.osc.preference.OscPrefKey.SSL_PORT, prefs)

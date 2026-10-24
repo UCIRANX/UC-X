@@ -3,6 +3,8 @@ package io.github.evokelektrique.tunnelforge
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -167,24 +169,47 @@ class TunnelVpnService : VpnService() {
         startWatchdog(attempt)
     }
 
-    /** اگر تا مهلت به «متصل» نرسیم، مذاکره را متوقف و علت (پیام‌های موتور) را نشان می‌دهیم. */
+    /** مهلت اتصال با بررسی زمان واقعی؛ اگر تا مهلت به «متصل» نرسیم، مذاکره متوقف و علت ثبت می‌شود. */
     private fun startWatchdog(attempt: Int) {
         Thread({
-            try {
-                Thread.sleep(CONNECT_TIMEOUT_MS)
-            } catch (_: InterruptedException) {
-            }
-            if (attempt == attemptSeq && stateFlow.value.first == STATE_CONNECTING) {
-                stateFlow.value = STATE_FAILED to
-                    "مهلت اتصال تمام شد · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}"
-                AppLogger.log("L2TP", "مهلت اتصال تمام شد")
-                runCatching { VpnBridge.nativeStopTunnel() }
-                runCatching { stopSelf() }
+            val started = SystemClock.elapsedRealtime()
+            while (attempt == attemptSeq && stateFlow.value.first == STATE_CONNECTING) {
+                val elapsed = SystemClock.elapsedRealtime() - started
+                if (elapsed >= CONNECT_TIMEOUT_MS) {
+                    stateFlow.value = STATE_FAILED to
+                        "مهلت اتصال تمام شد · پیام‌های موتور: ${VpnTunnelEvents.recentLogs()}"
+                    AppLogger.log("L2TP", "مهلت اتصال تمام شد (پس از ${elapsed / 1000} ثانیه)")
+                    runCatching { VpnBridge.nativeStopTunnel() }
+                    runCatching { stopSelf() }
+                    break
+                }
+                try {
+                    Thread.sleep(1000L)
+                } catch (_: InterruptedException) {
+                    break
+                }
             }
         }, "l2tp-watchdog").start()
     }
 
+    /** قبل از شروع مذاکره منتظر می‌ماند تا VPN سیستمی (مثلاً IKEv2) پایین بیاید؛ وگرنه protect شکست می‌خورد. */
+    private fun waitForVpnDown(maxMs: Long) {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val end = SystemClock.elapsedRealtime() + maxMs
+        while (SystemClock.elapsedRealtime() < end) {
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+            try {
+                Thread.sleep(300L)
+            } catch (_: InterruptedException) {
+                return
+            }
+        }
+        AppLogger.log("L2TP", "VPN سیستمی هنوز فعال است؛ ادامه با احتیاط")
+    }
+
     private fun runTunnel(server: String, user: String, password: String, psk: String, mtu: Int) {
+        waitForVpnDown(5_000L)
         val clientIp = IntArray(4)
         val dns1 = IntArray(4)
         val dns2 = IntArray(4)

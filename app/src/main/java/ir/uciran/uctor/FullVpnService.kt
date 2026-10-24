@@ -69,6 +69,11 @@ class FullVpnService : VpnService() {
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            // ری‌استارت بدون اکشن توسط اندروید: هرگز VPN جدیدی نسازد (VPN بیرونی جایگزین نشود)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_STOP_ALL -> {
                 // «قطع کامل» از نوتیفیکیشن: هم Tor و هم VPN

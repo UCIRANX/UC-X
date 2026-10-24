@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
 
     /** اتصال گارد: سینگ باکس و تور قبلاً قطع می‌شوند، چون هر سه VPN سراسری لازم دارند. */
     fun guardConnect() {
+        VpnSwitch.stopOthers(this, "GUARD")
         SingBoxController.stop(this, "سینگ باکس برای اتصال گارد قطع شد")
         stopSstpIfActive(this)
         stopIkev2IfActive(this)

@@ -107,6 +107,11 @@ internal class SstpVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            // ری‌استارت بدون اکشن توسط اندروید: هرگز VPN جدیدی نسازد (VPN بیرونی جایگزین نشود)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         return when (intent?.action) {
             ACTION_VPN_CONNECT -> {
                 prefs.edit().putBoolean(PREF_PAUSED, false).apply()
