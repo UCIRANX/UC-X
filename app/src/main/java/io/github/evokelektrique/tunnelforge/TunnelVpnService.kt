@@ -48,7 +48,7 @@ class TunnelVpnService : VpnService() {
         private const val CHANNEL_ID = "l2tp_vpn"
         private const val NOTIFICATION_ID = 2101
         private const val NOTIFICATION_PAUSED_ID = 2102
-        private const val DEFAULT_MTU = 1400
+        private const val DEFAULT_MTU = 1280
         private const val FALLBACK_DNS = "8.8.8.8"
         private const val PREFS = "proto_last_l2tp"
 
