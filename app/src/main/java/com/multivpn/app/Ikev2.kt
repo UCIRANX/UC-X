@@ -18,6 +18,7 @@ import android.net.ipsec.ike.IkeTunnelConnectionParams
 import android.net.ipsec.ike.SaProposal
 import android.net.ipsec.ike.TunnelModeChildSessionParams
 import android.os.Build
+import android.system.OsConstants
 import androidx.annotation.RequiresApi
 import androidx.preference.PreferenceManager
 import ir.uciran.uctor.Phase
@@ -119,6 +120,7 @@ fun errorChain(t: Throwable): String =
         "${it.javaClass.name}${it.message?.let { m -> ": $m" } ?: ""}"
     }
 
+@RequiresApi(Build.VERSION_CODES.S)
 private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
     val ike = IkeSessionParams.Builder()
         .setServerHostname(s.server)
@@ -156,7 +158,7 @@ private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
         ike.setAuthEap(null, eap)
     }
 
-    // اضافه کردن Child SA Proposals کامل با پشتیبانی از الگوریتم‌های مختلف
+    // Child SA Proposals کامل با پشتیبانی از الگوریتم‌های مختلف
     val child = TunnelModeChildSessionParams.Builder()
         .addChildSaProposal(
             ChildSaProposal.Builder()
@@ -173,10 +175,10 @@ private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
                 .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA1_96)
                 .build()
         )
-        // تنظیم Traffic Selectors جهت عبور کامل تمام ترافیک شبکه (0.0.0.0/0)
-        .addInnerAddressRequest(android.net.InetAddresses.parseNumericAddress("0.0.0.0"))
-        .addOutboundTrafficSelector(android.net.ipsec.ike.TrafficSelector(0, 65535, android.net.InetAddresses.parseNumericAddress("0.0.0.0"), android.net.InetAddresses.parseNumericAddress("255.255.255.255")))
-        .addInboundTrafficSelector(android.net.ipsec.ike.TrafficSelector(0, 65535, android.net.InetAddresses.parseNumericAddress("0.0.0.0"), android.net.InetAddresses.parseNumericAddress("255.255.255.255")))
+        // درخواست آدرس داخلی و DNS از سرور.
+        // Traffic Selector دستی لازم نیست: به‌صورت پیش‌فرض کل ترافیک (0.0.0.0/0 و ::/0) تونل می‌شود.
+        .addInternalAddressRequest(OsConstants.AF_INET)
+        .addInternalDnsServerRequest(OsConstants.AF_INET)
         .build()
 
     val localId = s.username.trim()
@@ -187,7 +189,6 @@ private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
     val params = IkeTunnelConnectionParams(ike.build(), child)
     val profile = Ikev2VpnProfile.Builder(params)
         .setBypassable(false)
-        .setBlockedApplications(emptyList())
         .build()
 
     return vpnManager(ctx).provisionVpnProfile(profile)
