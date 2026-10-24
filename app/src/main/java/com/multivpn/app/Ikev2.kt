@@ -120,70 +120,47 @@ fun errorChain(t: Throwable): String =
     }
 
 private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
-    // پیشنهادهای IKE با addIkeSaProposal (نام API در اندروید ۱۲ به بعد)؛ بدون آن build() شکست می‌خورد
     val ike = IkeSessionParams.Builder()
         .setServerHostname(s.server)
+        // اضافه کردن طیف کامل پروپوزال‌های سازگار با سرورهای تجاری (StrongSwan / serverlocation)
         .addIkeSaProposal(
             IkeSaProposal.Builder()
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_256)
-                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
-                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
-                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
-                .build()
-        )
-        .addIkeSaProposal(
-            IkeSaProposal.Builder()
-                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_256)
-                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
-                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
-                .addDhGroup(SaProposal.DH_GROUP_1536_BIT_MODP)
-                .build()
-        )
-        .addIkeSaProposal(
-            IkeSaProposal.Builder()
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_128)
                 .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
+                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA1_96)
                 .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
+                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_HMAC_SHA1)
+                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
                 .addDhGroup(SaProposal.DH_GROUP_1024_BIT_MODP)
                 .build()
         )
         .addIkeSaProposal(
             IkeSaProposal.Builder()
-                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_128)
-                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
-                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
-                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
-                .build()
-        )
-        .addIkeSaProposal(
-            IkeSaProposal.Builder()
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_128)
-                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_NONE)
-                .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
-                .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
-                .build()
-        )
-        .addIkeSaProposal(
-            IkeSaProposal.Builder()
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_256)
                 .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_NONE)
                 .addPseudorandomFunction(SaProposal.PSEUDORANDOM_FUNCTION_SHA2_256)
                 .addDhGroup(SaProposal.DH_GROUP_2048_BIT_MODP)
                 .build()
         )
-    if (s.remoteId.isNotBlank()) {
-        ike.setRemoteIdentification(IkeFqdnIdentification(s.remoteId.trim()))
-    }
+
+    // رفع مشکل ناسازگاری شناسه سرور (در صورت بروز خطا، از هاست‌نیم سرور به‌عنوان fallback استفاده می‌شود)
+    val targetRemoteId = if (s.remoteId.isNotBlank()) s.remoteId.trim() else s.server.trim()
+    ike.setRemoteIdentification(IkeFqdnIdentification(targetRemoteId))
+
     if (s.psk.isNotBlank()) {
         ike.setAuthPsk(s.psk.toByteArray(Charsets.UTF_8))
     } else {
-        // گواهی CA خالی است تا سیستم خودکار انتخاب کند (Select automatically)
         val eap = EapSessionConfig.Builder().setEapMsChapV2Config(s.username, s.password).build()
         ike.setAuthEap(null, eap)
     }
+
+    // اضافه کردن Child SA Proposals کامل با پشتیبانی از الگوریتم‌های مختلف
     val child = TunnelModeChildSessionParams.Builder()
         .addChildSaProposal(
             ChildSaProposal.Builder()
+                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_128)
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_GCM_16, SaProposal.KEY_LEN_AES_256)
                 .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_NONE)
                 .build()
@@ -191,17 +168,28 @@ private fun ikev2ConsentIntentInner(ctx: Context, s: Ikev2Server): Intent? {
         .addChildSaProposal(
             ChildSaProposal.Builder()
                 .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_256)
+                .addEncryptionAlgorithm(SaProposal.ENCRYPTION_ALGORITHM_AES_CBC, SaProposal.KEY_LEN_AES_128)
                 .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA2_256_128)
+                .addIntegrityAlgorithm(SaProposal.INTEGRITY_ALGORITHM_HMAC_SHA1_96)
                 .build()
         )
+        // تنظیم Traffic Selectors جهت عبور کامل تمام ترافیک شبکه (0.0.0.0/0)
+        .addInnerAddressRequest(android.net.InetAddresses.parseNumericAddress("0.0.0.0"))
+        .addOutboundTrafficSelector(android.net.ipsec.ike.TrafficSelector(0, 65535, android.net.InetAddresses.parseNumericAddress("0.0.0.0"), android.net.InetAddresses.parseNumericAddress("255.255.255.255")))
+        .addInboundTrafficSelector(android.net.ipsec.ike.TrafficSelector(0, 65535, android.net.InetAddresses.parseNumericAddress("0.0.0.0"), android.net.InetAddresses.parseNumericAddress("255.255.255.255")))
         .build()
-    // هویت محلی لازم است؛ برای EAP نام کاربری استفاده می‌شود (بدون آن پیام Necessary parameter missing می‌آید)
+
     val localId = s.username.trim()
     if (localId.isNotEmpty()) {
         ike.setLocalIdentification(IkeFqdnIdentification(localId))
     }
+
     val params = IkeTunnelConnectionParams(ike.build(), child)
-    val profile = Ikev2VpnProfile.Builder(params).build()
+    val profile = Ikev2VpnProfile.Builder(params)
+        .setBypassable(false)
+        .setBlockedApplications(emptyList())
+        .build()
+
     return vpnManager(ctx).provisionVpnProfile(profile)
 }
 
@@ -211,11 +199,12 @@ fun startIkev2(ctx: Context, s: Ikev2Server?): String? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "IKEv2 فقط روی اندروید ۱۲ به بالا کار می‌کند"
     AppLogger.log("IKEv2", "درخواست شروع اتصال پروفایل ثبت‌شده")
     return try {
+        // ثبت Event Receiver پیش از اجرای اتصال تا هیچ خطایی از دست نرود
+        Ikev2Events.register(ctx)
         stopOthersForIkev2(ctx)
         vpnManager(ctx).startProvisionedVpnProfile()
         Ikev2Store.setActive(ctx, true)
         AppLogger.log("IKEv2", "startProvisionedVpnProfile فراخوانی شد")
-        Ikev2Events.register(ctx)
         Ikev2Events.onStarted()
         runCatching { AppLogger.log("IKEv2", "وضعیت پروفایل سیستم: ${vpnManager(ctx).getProvisionedVpnProfileState()}") }
         null
@@ -225,10 +214,13 @@ fun startIkev2(ctx: Context, s: Ikev2Server?): String? {
     }
 }
 
-/** قطع: حذف پروفایل ثبت‌شده (سیستم اتصال را می‌بندد). */
+/** قطع: توقف پروفایل ثبت‌شده بدون پاک کردن کامل اطلاعات در صورت عدم نیاز (جلوگیری از پرش شبکه) */
 fun stopIkev2(ctx: Context) {
-    AppLogger.log("IKEv2", "قطع اتصال (حذف پروفایل ثبت‌شده)")
+    AppLogger.log("IKEv2", "قطع اتصال IKEv2")
     Ikev2Events.onStopped()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        runCatching { vpnManager(ctx).stopProvisionedVpnProfile() }
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         runCatching { vpnManager(ctx).deleteProvisionedVpnProfile() }
     }
