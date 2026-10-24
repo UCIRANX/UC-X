@@ -46,6 +46,7 @@ add_library(
   util.c
   util_endian.c
   modp2048_data.c
+  modp_groups_data.c
   ikev1.c
   esp_udp.c
   l2tp_avps.c
