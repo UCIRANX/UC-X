@@ -69,6 +69,9 @@ import ir.uciran.uctor.ui.Green
 import ir.uciran.uctor.ui.Surface1
 import ir.uciran.uctor.ui.Violet
 import com.multivpn.app.log.AppLogger
+import java.io.File
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.layout.Spacer
 import com.multivpn.app.oc.OcParams
 import com.multivpn.app.oc.OcVpnService
 import kotlinx.coroutines.delay
@@ -164,6 +167,7 @@ fun ProtocolScreen() {
     var pendingKey by rememberSaveable { mutableStateOf<String?>(null) }
     var note by remember { mutableStateOf("") }
     var showLog by rememberSaveable { mutableStateOf(false) }
+    var crashNow by remember { mutableStateOf(readLastCrash(context)) }
     var showChooser by rememberSaveable { mutableStateOf(false) }
     var dialogOpen by rememberSaveable { mutableStateOf(false) }
     var dialogType by rememberSaveable { mutableStateOf(VpnType.IKEV2) }
@@ -500,6 +504,12 @@ fun ProtocolScreen() {
     if (showLog) {
         LogDialog(
             text = AppLogger.read(),
+            crash = crashNow,
+            onCopyCrash = { clipboard.setText(AnnotatedString(crashNow)) },
+            onDeleteCrash = {
+                runCatching { File(context.filesDir, "crash.txt").delete() }
+                crashNow = ""
+            },
             onDismiss = { showLog = false },
             onCopy = { clipboard.setText(AnnotatedString(AppLogger.read())) },
             onShare = {
@@ -675,10 +685,18 @@ private fun ErrorCard(summary: String, onDetails: () -> Unit, onDismiss: () -> U
     }
 }
 
+/** متن آخرین کرش ذخیره‌شده (از UcTorApp)؛ اگر نباشد رشتهٔ خالی. */
+private fun readLastCrash(context: android.content.Context): String =
+    runCatching { File(context.filesDir, "crash.txt").takeIf { it.exists() }?.readText().orEmpty() }
+        .getOrDefault("")
+
 /** پنجرهٔ لاگ کامل برنامه با کپی، ارسال و پاک‌کردن. */
 @Composable
 private fun LogDialog(
     text: String,
+    crash: String,
+    onCopyCrash: () -> Unit,
+    onDeleteCrash: () -> Unit,
     onDismiss: () -> Unit,
     onCopy: () -> Unit,
     onShare: () -> Unit,
@@ -691,6 +709,15 @@ private fun LogDialog(
         text = {
             SelectionContainer {
                 Column(Modifier.fillMaxWidth().height(380.dp).verticalScroll(rememberScrollState())) {
+                    if (crash.isNotBlank()) {
+                        Text("کرش آخر برنامه (برای ارسال کپی کنید)", color = PDanger, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(crash, color = PTextMain, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = onCopyCrash) { Text("کپی کرش") }
+                            TextButton(onClick = onDeleteCrash) { Text("حذف کرش", color = PDanger) }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                    }
                     Text(text.ifBlank { "لاگی ثبت نشده است" }, color = PTextMain, fontSize = 10.sp)
                 }
             }
