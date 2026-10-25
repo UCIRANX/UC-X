@@ -41,7 +41,8 @@ public class GlobalPreferences {
     static GlobalPreferences getInstance()
     {
         if (instance == null)
-            throw new RuntimeException("Global preferences instance is not set");
+            // پیش‌فرض: بدون محدودیت‌های app restrictions (برنامه‌ی میزبان این مقادیر را ست نمی‌کند)
+            instance = new GlobalPreferences(false, false, false);
 
         return instance;
     }
