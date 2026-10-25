@@ -19,6 +19,8 @@ android {
     defaultConfig {
         minSdk = 29
         buildConfigField("boolean", "openvpn3", "true")
+        // نسخهٔ کامل (نه skeleton): NativeUtils و StatusListener به این مقدار نگاه می‌کنند
+        buildConfigField("String", "FLAVOR", "\"ui\"")
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
