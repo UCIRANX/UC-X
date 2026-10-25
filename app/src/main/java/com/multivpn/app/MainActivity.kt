@@ -1,6 +1,5 @@
 package com.multivpn.app
 
-import com.multivpn.app.log.AppLogger
 import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -121,7 +120,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        runCatching { OpenVpnManager.init(this) }.onFailure { AppLogger.log("OpenVPN", "مقداردهی ناموفق: ${it.message}") }
         // لبه‌تا‌لبه؛ فاصله‌ی نوار سیستم در AppRoot با WindowInsets رعایت می‌شود
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT
