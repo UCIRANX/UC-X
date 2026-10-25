@@ -69,6 +69,9 @@ object OpenVpnManager : VpnStatus.StateListener {
 
     fun isActive(): Boolean = flow.value.first != IDLE
 
+    /** این نسخهٔ هسته این متد را هم صدا می‌زند؛ فعلاً به پروفایل فعال نیازی نداریم. */
+    override fun setConnectedVPN(uuid: String) {}
+
     /** null یعنی شروع شد؛ وگرنه متن خطا. */
     fun connect(ctx: Context, s: ProtoServer): String? {
         init(ctx)

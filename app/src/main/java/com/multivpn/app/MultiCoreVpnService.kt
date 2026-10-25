@@ -1,5 +1,7 @@
 package com.multivpn.app
 
+import kotlinx.coroutines.withContext
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -61,6 +63,8 @@ class MultiCoreVpnService : VpnService() {
     private var coreName = "سینگ‌باکس"
     private var serverName = ""
     private var socksPort = CoreConfigGenerator.LOCAL_SOCKS_PORT
+    /** علت آخرین شکست برقراری تونل (برای نمایش به کاربر و لاگ). */
+    @Volatile private var tunnelError: String = ""
     private var serverPing = -1L
     private var tunnelUp = false
     private var awgHandle = 0
@@ -110,14 +114,14 @@ class MultiCoreVpnService : VpnService() {
         serverPing = intent?.getLongExtra("SERVER_PING", -1L) ?: -1L
 
         serviceScope.launch {
-            val ok = establishTunnel(serverName, socksPort)
+            val ok = withContext(Dispatchers.IO) { establishTunnel(serverName, socksPort) }
             if (ok) {
                 tunnelUp = true
                 setPaused(false)
                 showNotification(connecting = false)
                 startSpeedUpdates()
             } else {
-                showNotification(connecting = false)
+                SingBoxController.stop(this@MultiCoreVpnService, "تونل برقرار نشد: $tunnelError")
             }
         }
         startExpirationWatchdog()
@@ -174,11 +178,39 @@ class MultiCoreVpnService : VpnService() {
                 Charsets.UTF_8
             )
 
-            Tun2SocksBridge.start(hevConf, pfd.fd)
+            if (!Tun2SocksBridge.start(hevConf, pfd.fd)) {
+                return failTunnel(Tun2SocksBridge.lastError.ifBlank { "tun2socks اجرا نشد" })
+            }
+            if (!waitForHevAlive(4_000L)) {
+                val tail = runCatching { hevLog.readLines().takeLast(5).joinToString(" | ") }.getOrDefault("")
+                return failTunnel("tun2socks بعد از استارت فعال نماند. لاگ: $tail")
+            }
+            tunnelError = ""
+            com.multivpn.app.log.AppLogger.log("VPN", "tun2socks فعال شد؛ SOCKS=127.0.0.1:$socksPort")
             true
-        } catch (_: Throwable) {
-            false
+        } catch (t: Throwable) {
+            failTunnel(t.message ?: t.javaClass.simpleName)
         }
+    }
+
+    /** ثبت شکست: رابط TUN بسته می‌شود تا ترافیک بی‌مقصد دور ریخته نشود. */
+    private fun failTunnel(msg: String): Boolean {
+        tunnelError = msg
+        com.multivpn.app.log.AppLogger.log("VPN", "برقراری تونل ناموفق: $msg")
+        runCatching { vpnInterface?.close() }
+        vpnInterface = null
+        return false
+    }
+
+    /** بعد از استارت، مهلت می‌دهیم تا thread داخلی hev بالا بیاید و زنده بماند. */
+    private fun waitForHevAlive(timeoutMs: Long): Boolean {
+        Thread.sleep(600)
+        val until = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < until) {
+            if (Tun2SocksBridge.isRunning()) return true
+            Thread.sleep(150)
+        }
+        return false
     }
 
     private fun pauseTunnel() {
@@ -198,7 +230,7 @@ class MultiCoreVpnService : VpnService() {
             return
         }
         serviceScope.launch {
-            val ok = establishTunnel(serverName, socksPort)
+            val ok = withContext(Dispatchers.IO) { establishTunnel(serverName, socksPort) }
             if (ok) {
                 setPaused(false)
                 tunnelUp = true
