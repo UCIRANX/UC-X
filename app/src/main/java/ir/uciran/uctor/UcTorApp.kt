@@ -13,6 +13,16 @@ class UcTorApp : Application() {
     }
 
     override fun onCreate() {
+        // اولین کار: ثبت هر کرش‌نشده در فایل crash.txt تا علت دقیق قابل بررسی باشد
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                val report = "time=${java.util.Date()}\nthread=${thread.name}\n${error.stackTraceToString()}"
+                File(filesDir, "crash.txt").writeText(report)
+                getExternalFilesDir(null)?.let { File(it, "crash.txt").writeText(report) }
+            }
+            previousHandler?.uncaughtException(thread, error)
+        }
         super.onCreate()
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = getSystemService(NotificationManager::class.java)
