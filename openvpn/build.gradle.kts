@@ -111,4 +111,6 @@ tasks.matching { it.name.startsWith("compile") && (it.name.endsWith("JavaWithJav
 dependencies {
     implementation("androidx.annotation:annotation:1.9.1")
     implementation("androidx.core:core:1.13.1")
+    // منابع کپی‌شدهٔ ics از ?attr/colorControlNormal استفاده می‌کنند؛ این attribute از AppCompat می‌آید
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }
