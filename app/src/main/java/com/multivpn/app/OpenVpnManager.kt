@@ -7,6 +7,7 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Base64
 import com.multivpn.app.log.AppLogger
+import de.blinkt.openvpn.core.ConnectionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,24 +36,29 @@ object OpenVpnManager {
     /** شنونده‌ی وضعیت هسته؛ فقط در اولین اتصال ساخته می‌شود. */
     private val listener by lazy {
         object : de.blinkt.openvpn.core.VpnStatus.StateListener {
+            // کتابخانه‌ی OpenVPN ممکن است هر کدام از این مقادیر را null بفرستد؛
+            // پارامترها باید nullable باشند تا کاتلین با NullPointerException کرش نکند.
             override fun updateState(
-                state: String,
-                logmessage: String,
+                state: String?,
+                logmessage: String?,
                 localizedResId: Int,
-                level: de.blinkt.openvpn.core.ConnectionStatus,
+                level: ConnectionStatus?,
                 intent: Intent?,
             ) {
-                val mapped = when (state) {
-                    "CONNECTED" -> CONNECTED
-                    "USERPAUSE", "SCREENOFF", "NONETWORK" -> PAUSED
-                    "AUTH_FAILED" -> FAILED
-                    "DISCONNECTED", "EXITING", "NOPROCESS" -> IDLE
+                // نگاشت بر اساس level (نه نام وضعیت) تا وضعیت‌هایی مثل
+                // لغو اجازه‌ی VPN یا timeout به‌درستی IDLE/FAILED شوند و UI گیر نکند.
+                val mapped = when (level) {
+                    ConnectionStatus.LEVEL_CONNECTED -> CONNECTED
+                    ConnectionStatus.LEVEL_VPNPAUSED,
+                    ConnectionStatus.LEVEL_NONETWORK -> PAUSED
+                    ConnectionStatus.LEVEL_AUTH_FAILED -> FAILED
+                    ConnectionStatus.LEVEL_NOTCONNECTED -> IDLE
                     else -> CONNECTING
                 }
-                flow.value = mapped to logmessage
+                flow.value = mapped to (logmessage ?: "")
             }
 
-            override fun setConnectedVPN(uuid: String) {}
+            override fun setConnectedVPN(uuid: String?) {}
         }
     }
 
