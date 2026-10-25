@@ -19,8 +19,8 @@ android {
     defaultConfig {
         minSdk = 29
         buildConfigField("boolean", "openvpn3", "true")
-        // نسخهٔ کامل (نه skeleton): NativeUtils و StatusListener به این مقدار نگاه می‌کنند
-        buildConfigField("String", "FLAVOR", "\"ui\"")
+                // این ماژول کلاس‌های skeleton را استفاده می‌کند (ProfileEncryption، LogWindow)؛ پس flavor هم skeleton است
+        buildConfigField("String", "FLAVOR", "\"skeleton\"")
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }

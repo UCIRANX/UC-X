@@ -18,8 +18,11 @@ public class NativeUtils {
     public static String getNativeAPI() {
         if (isRoboUnitTest())
             return "ROBO";
-        else
+        try {
             return getJNIAPI();
+        } catch (Throwable t) {
+            return "error";
+        }
     }
 
     private static native String getJNIAPI();
@@ -50,11 +53,18 @@ public class NativeUtils {
 
     public static native double[] getOpenSSLSpeed(String algorithm, int testnum);
 
+    /** خطای بارگذاری کتابخانه‌ی native (اگر رخ دهد)؛ به‌جای کرش پروسه‌ی اصلی ثبت می‌شود. */
+    public static volatile String loadError;
+
     static {
         if (!isRoboUnitTest()) {
-            System.loadLibrary("ovpnutil");
-            if (!BuildConfig.FLAVOR.equals("skeleton")) {
-                System.loadLibrary("osslspeedtest");
+            try {
+                System.loadLibrary("ovpnutil");
+                if (!BuildConfig.FLAVOR.equals("skeleton")) {
+                    System.loadLibrary("osslspeedtest");
+                }
+            } catch (Throwable t) {
+                loadError = t.toString();
             }
         }
     }
