@@ -5,6 +5,8 @@
  */
 plugins {
     id("com.android.library")
+    // لازم است: AppCustomControl.kt در این ماژول است
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -64,43 +66,45 @@ abstract class GenerateSwigTask : Exec() {
     abstract val outputDir: DirectoryProperty
 }
 
-fun registerGenSwigTask(variantName: String, variantDirName: String): TaskProvider<GenerateSwigTask> {
-    val baseDir = layout.buildDirectory.dir("generated/source/ovpn3swig/${variantDirName}")
+// خروجی ثابت (بدون وابستگی به نام variant)؛ مسیر ریشهٔ سورس‌ها: .../ovpn3swig/main
+val swigOutRoot = layout.buildDirectory.dir("generated/source/ovpn3swig/main")
 
-    val genTask = tasks.register<GenerateSwigTask>("generateOpenVPN3Swig${variantName}") {
-        val genDir = baseDir.get().asFile.resolve("net/openvpn/ovpn3")
-        outputDir.set(baseDir)
+val generateOpenVPN3Swig = tasks.register<GenerateSwigTask>("generateOpenVPN3Swig") {
+    val genDir = swigOutRoot.get().asFile.resolve("net/openvpn/ovpn3")
+    outputDir.set(swigOutRoot)
 
-        doFirst {
-            mkdir(genDir)
-        }
-        commandLine(
-            listOf(
-                swigcmd,
-                "-outdir", genDir.absolutePath,
-                "-outcurrentdir",
-                "-c++",
-                "-java",
-                "-package", "net.openvpn.ovpn3",
-                "-Isrc/main/cpp/openvpn3/client",
-                "-Isrc/main/cpp/openvpn3/",
-                "-DOPENVPN_PLATFORM_ANDROID",
-                "-o", "${genDir}/ovpncli_wrap.cxx",
-                "-oh", "${genDir}/ovpncli_wrap.h",
-                "src/main/cpp/openvpn3/client/ovpncli.i"
-            )
+    doFirst {
+        genDir.mkdirs()
+    }
+    commandLine(
+        listOf(
+            swigcmd,
+            "-outdir", genDir.absolutePath,
+            "-outcurrentdir",
+            "-c++",
+            "-java",
+            "-package", "net.openvpn.ovpn3",
+            "-Isrc/main/cpp/openvpn3/client",
+            "-Isrc/main/cpp/openvpn3/",
+            "-DOPENVPN_PLATFORM_ANDROID",
+            "-o", "${genDir}/ovpncli_wrap.cxx",
+            "-oh", "${genDir}/ovpncli_wrap.h",
+            "src/main/cpp/openvpn3/client/ovpncli.i"
         )
-        inputs.files("src/main/cpp/openvpn3/client/ovpncli.i")
-    }
-    return genTask
+    )
+    inputs.files("src/main/cpp/openvpn3/client/ovpncli.i")
 }
 
-androidComponents {
-    onVariants(selector().all()) { variant ->
-        val execTask = registerGenSwigTask(variant.name, variant.name.replace("-", "/"))
-        variant.sources.java?.addGeneratedSourceDirectory(execTask, GenerateSwigTask::outputDir)
+// مسیر تولیدشده را صریحاً به سورس‌های جاوای ماژول اضافه می‌کنیم
+android {
+    sourceSets.getByName("main") {
+        java.srcDir(swigOutRoot)
     }
 }
+
+// هر کامپایل جاوا/کاتلین باید بعد از تولید SWIG اجرا شود
+tasks.matching { it.name.startsWith("compile") && (it.name.endsWith("JavaWithJavac") || it.name.endsWith("Kotlin")) }
+    .configureEach { dependsOn(generateOpenVPN3Swig) }
 
 dependencies {
     implementation("androidx.annotation:annotation:1.9.1")
