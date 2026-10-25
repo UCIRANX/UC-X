@@ -120,6 +120,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        OpenVpnManager.init(this)
         // لبه‌تا‌لبه؛ فاصله‌ی نوار سیستم در AppRoot با WindowInsets رعایت می‌شود
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT

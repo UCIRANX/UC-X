@@ -20,8 +20,8 @@ import org.json.JSONObject
 /** نوع پروتکل یک سرور در بخش «پروتکل‌ها». */
 enum class VpnType(val label: String) {
     IKEV2("IKEv2"),
-    L2TP("L2TP/IPsec"),
     OPENCONNECT("OpenConnect"),
+    OPENVPN("OpenVPN"),
 }
 
 /**
@@ -44,8 +44,12 @@ data class ProtoServer(
     val country: String = "",
     /** آدرس منبع ساب‌لینک که این سرور از آن آمده است. */
     val source: String = "",
+    /** کانفیگ کامل OpenVPN به‌صورت base64 (فقط برای OPENVPN). */
+    val config: String = "",
 ) {
-    val key: String get() = "${type.name}|$host|$port|$user"
+    val key: String get() =
+        if (type == VpnType.OPENVPN) "OPENVPN|${config.hashCode()}|$country"
+        else "${type.name}|$host|$port|$user"
     val label: String get() = if (name.isNotBlank()) name else host
 }
 
@@ -64,7 +68,7 @@ object ProtoLists {
     const val PLUS_URL = "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UcPlus.txt"
 
     val SUB_URLS: List<String> = listOf(
-        "https://raw.githubusercontent.com/UCIRANX/Comp/refs/heads/main/UcL2tp.txt",
+        "https://raw.githubusercontent.com/UCIRANX/Comp/refs/heads/main/UcOvpn.txt",
         PLUS_URL,
         "https://raw.githubusercontent.com/UCIRANX/Vpn/refs/heads/main/UCX.txt",
     )
@@ -82,9 +86,6 @@ object ProtoLists {
         Ikev2Store.load(ctx).forEach {
             out += ProtoServer(VpnType.IKEV2, it.name, it.server, 0, it.username, it.password, it.psk, it.remoteId, "", "", it.key)
         }
-        ProtocolStore.loadL2tp(ctx).forEach {
-            out += ProtoServer(VpnType.L2TP, it.name, it.server, 0, it.username, it.password, it.psk, "", "", "", it.key)
-        }
         ProtocolStore.loadOc(ctx).forEach {
             out += ProtoServer(VpnType.OPENCONNECT, it.name, it.server, it.port, it.username, it.password, "", "", it.authGroup, it.certPin, it.key)
         }
@@ -99,10 +100,6 @@ object ProtoLists {
                 val rest = Ikev2Store.load(ctx).filter { it.key != replaceRaw && it.key != newRaw }
                 Ikev2Store.save(ctx, rest + Ikev2Server(item.name, item.host, item.user, item.password, item.remoteId, item.psk))
             }
-            VpnType.L2TP -> {
-                val rest = ProtocolStore.loadL2tp(ctx).filter { it.key != replaceRaw && it.key != newRaw }
-                ProtocolStore.saveL2tp(ctx, rest + L2tpEntry(item.name, item.host, item.psk, item.user, item.password))
-            }
             VpnType.OPENCONNECT -> {
                 val rest = ProtocolStore.loadOc(ctx).filter { it.key != replaceRaw && it.key != newRaw }
                 ProtocolStore.saveOc(
@@ -110,14 +107,15 @@ object ProtoLists {
                     rest + OcEntry(item.name, item.host, item.port, item.user, item.password, item.authGroup, item.certPin),
                 )
             }
+            VpnType.OPENVPN -> Unit
         }
     }
 
     fun deleteManual(ctx: Context, item: ProtoServer) {
         when (item.type) {
             VpnType.IKEV2 -> Ikev2Store.save(ctx, Ikev2Store.load(ctx).filter { it.key != item.rawKey })
-            VpnType.L2TP -> ProtocolStore.saveL2tp(ctx, ProtocolStore.loadL2tp(ctx).filter { it.key != item.rawKey })
             VpnType.OPENCONNECT -> ProtocolStore.saveOc(ctx, ProtocolStore.loadOc(ctx).filter { it.key != item.rawKey })
+            VpnType.OPENVPN -> Unit
         }
     }
 
@@ -163,6 +161,22 @@ object ProtoLists {
 
     fun loadSub(ctx: Context): List<ProtoServer> = readServers(prefs(ctx).getString(K_SUB, "[]"))
 
+    /** ترتیب OpenVPN: ۳ تا TCP، سپس ۱ تا UDP، تکرار؛ وقتی UDP تمام شد، بقیهٔ TCP در انتها. */
+    fun orderOvpn(list: List<ProtoServer>): List<ProtoServer> {
+        val others = list.filter { it.type != VpnType.OPENVPN }
+        val tcp = list.filter { it.type == VpnType.OPENVPN && it.host == "TCP" }
+        val udp = list.filter { it.type == VpnType.OPENVPN && it.host == "UDP" }
+        val merged = mutableListOf<ProtoServer>()
+        var ti = 0
+        var ui = 0
+        while (ti < tcp.size || ui < udp.size) {
+            repeat(3) { if (ti < tcp.size) merged += tcp[ti++] }
+            if (ui < udp.size) merged += udp[ui++]
+        }
+        return others + merged
+    }
+
+
     fun saveSub(ctx: Context, list: List<ProtoServer>) {
         prefs(ctx).edit().putString(K_SUB, writeServers(list)).apply()
     }
@@ -183,7 +197,7 @@ object ProtoLists {
             res.forEach { (url, text) ->
                 PlusParser.parse(text).forEach { servers.putIfAbsent(it.key, it.copy(source = url)) }
             }
-            saveSub(ctx, servers.values.toList())
+            saveSub(ctx, orderOvpn(servers.values.toList()))
             markUpdated(ctx)
             "${servers.size} سرور از ساب‌لینک دریافت شد"
         }
@@ -258,7 +272,7 @@ object ProtoLists {
                 JSONObject()
                     .put("t", it.type.name).put("n", it.name).put("h", it.host).put("o", it.port)
                     .put("u", it.user).put("p", it.password).put("k", it.psk).put("r", it.remoteId)
-                    .put("g", it.authGroup).put("c", it.certPin).put("raw", it.rawKey).put("cc", it.country).put("src", it.source)
+                    .put("g", it.authGroup).put("c", it.certPin).put("raw", it.rawKey).put("cc", it.country).put("src", it.source).put("cfg", it.config)
             )
         }
         return arr.toString()
@@ -282,6 +296,7 @@ object ProtoLists {
                 rawKey = o.optString("raw"),
                 country = o.optString("cc"),
                 source = o.optString("src"),
+                config = o.optString("cfg"),
             )
         }
     }.getOrDefault(emptyList())
@@ -299,7 +314,7 @@ class ProtoSubWorker(appContext: Context, params: WorkerParameters) : CoroutineW
 /**
  * تجزیهٔ ساب‌لینک بخش پلاس. فرمت هر خط (فیلد خالی = مقدار خالی، بدون پیش‌فرض):
  *   IKEV2:server:port:username:password:psk:remoteid:name:country
- *   L2TP:server:port:username:password:psk:name:country
+ *   udp:کد_کشور:base64 و tcp:کد_کشور:base64 (OpenVPN)
  *   OPENCONNECT:server:port:username:password:authgroup:certpin:name:country
  * خطوطی که پیشوند شناخته‌شده ندارند نادیده گرفته می‌شوند.
  */
@@ -308,9 +323,10 @@ object PlusParser {
 
     private fun parseLine(line: String): ProtoServer? {
         if (!line.contains(':')) return null
-        val type = when (line.substringBefore(':').trim().uppercase()) {
+        val head = line.substringBefore(':').trim().lowercase()
+        if (head == "udp" || head == "tcp") return parseOvpn(head, line)
+        val type = when (head.uppercase()) {
             "IKEV2" -> VpnType.IKEV2
-            "L2TP" -> VpnType.L2TP
             "OPENCONNECT" -> VpnType.OPENCONNECT
             else -> return null
         }
@@ -321,8 +337,33 @@ object PlusParser {
         val port = at(1).toIntOrNull() ?: 0
         return when (type) {
             VpnType.IKEV2 -> ProtoServer(type, at(6), host, port, at(2), at(3), at(4), at(5), "", "", "", at(7))
-            VpnType.L2TP -> ProtoServer(type, at(5), host, port, at(2), at(3), at(4), "", "", "", "", at(6))
             VpnType.OPENCONNECT -> ProtoServer(type, at(6), host, port, at(2), at(3), "", "", at(4), at(5), "", at(7))
+            VpnType.OPENVPN -> null
         }
+    }
+
+    /** خط OpenVPN: proto:کد_کشور:base64 — پروتکل فقط برای برچسب و کشور فقط برای نمایش است. */
+    private fun parseOvpn(proto: String, line: String): ProtoServer? {
+        val parts = line.split(':', limit = 3)
+        if (parts.size < 3) return null
+        val cc = parts[1].trim().uppercase()
+        val b64 = parts[2].trim()
+        if (b64.isEmpty()) return null
+        return ProtoServer(
+            type = VpnType.OPENVPN,
+            name = "OpenVPN ${proto.uppercase()}",
+            host = proto.uppercase(),
+            port = 0,
+            user = "",
+            password = "",
+            psk = "",
+            remoteId = "",
+            authGroup = "",
+            certPin = "",
+            rawKey = "",
+            country = cc,
+            source = "",
+            config = b64,
+        )
     }
 }

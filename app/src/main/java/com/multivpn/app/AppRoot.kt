@@ -64,10 +64,9 @@ private val TextSub = Color(0xFFB4B4C8)
 private fun initialMode(ctx: Context): AppMode {
     if (SingBoxController.connected || SingBoxController.connecting) return AppMode.VPN
     if (isSstpActive(ctx)) return AppMode.SSTP
-    val l2 = io.github.evokelektrique.tunnelforge.TunnelVpnService.state.value.first
+    val ovpn = OpenVpnManager.status.value.first
     val oc = com.multivpn.app.oc.OcVpnService.state.value.first
-    if (l2 == io.github.evokelektrique.tunnelforge.TunnelVpnService.STATE_CONNECTED ||
-        l2 == io.github.evokelektrique.tunnelforge.TunnelVpnService.STATE_CONNECTING ||
+    if (ovpn == OpenVpnManager.CONNECTED || ovpn == OpenVpnManager.CONNECTING ||
         oc == com.multivpn.app.oc.OcVpnService.STATE_CONNECTED ||
         oc == com.multivpn.app.oc.OcVpnService.STATE_CONNECTING) return AppMode.IKEV2
     if (TorController.state.value.phase != Phase.IDLE) return AppMode.TOR

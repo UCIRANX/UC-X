@@ -64,7 +64,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.evokelektrique.tunnelforge.TunnelVpnService
 import ir.uciran.uctor.ui.Cyan
 import ir.uciran.uctor.ui.Green
 import ir.uciran.uctor.ui.Surface1
@@ -82,12 +81,12 @@ private val PTextMain = Color(0xFFEDEDF5)
 private val PTextSub = Color(0xFFB4B4C8)
 private val PDanger = Color(0xFFFF6B6B)
 private val PIkev2 = Color(0xFF7C5CFF)
-private val PL2tp = Color(0xFF00B4D8)
+private val POvpn = Color(0xFF2EC4B6)
 private val POc = Color(0xFFFF8A3D)
 
 private fun typeColor(t: VpnType): Color = when (t) {
     VpnType.IKEV2 -> PIkev2
-    VpnType.L2TP -> PL2tp
+    VpnType.OPENVPN -> POvpn
     VpnType.OPENCONNECT -> POc
 }
 
@@ -102,13 +101,7 @@ private fun fieldsFor(t: VpnType): List<Field> = when (t) {
         Field("remoteId", "Server identity", optional = true),
         Field("psk", "PSK (اگر پر شود، به جای EAP)", secret = true, optional = true),
     )
-    VpnType.L2TP -> listOf(
-        Field("name", "نام پروفایل", optional = true),
-        Field("server", "سرور"),
-        Field("psk", "IPSec pre-shared key (PSK)", secret = true),
-        Field("username", "User ID"),
-        Field("password", "رمز", secret = true, optional = true),
-    )
+    VpnType.OPENVPN -> emptyList()
     VpnType.OPENCONNECT -> listOf(
         Field("name", "نام", optional = true),
         Field("server", "سرور (host یا URL)"),
@@ -124,27 +117,23 @@ private fun initialFor(s: ProtoServer?, t: VpnType): Map<String, String> {
     if (s == null) return emptyMap()
     return when (t) {
         VpnType.IKEV2 -> mapOf("name" to s.name, "server" to s.host, "username" to s.user, "password" to s.password, "remoteId" to s.remoteId, "psk" to s.psk)
-        VpnType.L2TP -> mapOf("name" to s.name, "server" to s.host, "psk" to s.psk, "username" to s.user, "password" to s.password)
+        VpnType.OPENVPN -> emptyMap()
         VpnType.OPENCONNECT -> mapOf("name" to s.name, "server" to s.host, "port" to (if (s.port > 0) s.port.toString() else ""), "username" to s.user, "password" to s.password, "authGroup" to s.authGroup, "certPin" to s.certPin)
     }
 }
 
 private fun ProtoServer.toIkev2() = Ikev2Server(name, host, user, password, remoteId, psk)
 
-/** شروع L2TP یا OpenConnect؛ VPNهای دیگر قبلاً قطع می‌شوند. */
+/** شروع OpenConnect؛ VPNهای دیگر قبلاً قطع می‌شوند. */
 private fun startServer(context: Context, s: ProtoServer) {
     VpnSwitch.stopOthers(context, "PLUS")
     stopOthersForIkev2(context)
     stopIkev2IfActive(context)
     AppLogger.init(context)
     // خطای قدیمی پروتکل‌های دیگر را پاک می‌کنیم تا با اتصال جدید اشتباه نشان داده نشود
-    TunnelVpnService.dismissError()
     OcVpnService.dismissError()
     when (s.type) {
-        VpnType.L2TP -> {
-            AppLogger.log("UI", "شروع L2TP به ${s.host}")
-            context.startService(TunnelVpnService.connectIntent(context, s.host, s.user, s.password, s.psk))
-        }
+        VpnType.OPENVPN -> Unit
         VpnType.OPENCONNECT -> {
             AppLogger.log("UI", "شروع OpenConnect به ${s.host}:${s.port}")
             context.startService(
@@ -185,20 +174,20 @@ fun ProtocolScreen() {
     // ───── وضعیت واقعی هر پروتکل ─────
     val ikev2Status by Ikev2Events.status.collectAsState()
     val ikev2Connected = ikev2Status.first == Ikev2Events.CONNECTED
-    val l2tpState by TunnelVpnService.state.collectAsState()
+    val ovpnStatus by OpenVpnManager.status.collectAsState()
+    val ovpnConnected = ovpnStatus.first == OpenVpnManager.CONNECTED
+    val ovpnBusy = ovpnStatus.first == OpenVpnManager.CONNECTING
     val ocState by OcVpnService.state.collectAsState()
-    val l2tpConnected = l2tpState.first == TunnelVpnService.STATE_CONNECTED
-    val l2tpBusy = l2tpState.first == TunnelVpnService.STATE_CONNECTING
     val ocConnected = ocState.first == OcVpnService.STATE_CONNECTED
     val ocBusy = ocState.first == OcVpnService.STATE_CONNECTING
-    val connectedAny = ikev2Connected || l2tpConnected || ocConnected
+    val connectedAny = ikev2Connected || ovpnConnected || ocConnected
     val ikev2Connecting = ikev2Status.first == Ikev2Events.CONNECTING
     val ikev2Failed = ikev2Status.first == Ikev2Events.FAILED
-    val busyAny = l2tpBusy || ocBusy || ikev2Connecting
+    val busyAny = ovpnBusy || ocBusy || ikev2Connecting
     val anyActive = connectedAny || busyAny
 
     // پیام‌های موقت (مثل «قطع شد») با تغییر واقعی وضعیت پاک می‌شوند
-    LaunchedEffect(ikev2Connected, l2tpState.first, ocState.first) { note = "" }
+    LaunchedEffect(ikev2Connected, ovpnStatus.first, ocState.first) { note = "" }
 
     // بار اول که هنوز ساب‌لینکی گرفته نشده، بروزرسانی خودکار
     LaunchedEffect(Unit) {
@@ -266,6 +255,14 @@ fun ProtocolScreen() {
                 intent != null -> ikev2Launcher.launch(intent)
                 else -> note = startIkev2(context, s.toIkev2()) ?: ""
             }
+        } else if (s.type == VpnType.OPENVPN) {
+            stopOthersForIkev2(context)
+            stopIkev2IfActive(context)
+            if (OcVpnService.state.value.first != OcVpnService.STATE_IDLE) {
+                context.startService(OcVpnService.disconnectIntent(context))
+            }
+            if (OpenVpnManager.isActive()) OpenVpnManager.disconnect(context)
+            note = OpenVpnManager.connect(context, s) ?: ""
         } else {
             val consent = VpnService.prepare(context)
             if (consent != null) vpnLauncher.launch(consent) else startServer(context, s)
@@ -274,9 +271,7 @@ fun ProtocolScreen() {
 
     fun disconnectAll() {
         if (ikev2Connected || ikev2Connecting) stopIkev2(context)
-        if (TunnelVpnService.state.value.first != TunnelVpnService.STATE_IDLE) {
-            context.startService(TunnelVpnService.disconnectIntent(context))
-        }
+        if (OpenVpnManager.isActive()) OpenVpnManager.disconnect(context)
         if (OcVpnService.state.value.first != OcVpnService.STATE_IDLE) {
             context.startService(OcVpnService.disconnectIntent(context))
         }
@@ -284,10 +279,9 @@ fun ProtocolScreen() {
 
     /** وضعیت زنده (نه مقدار قدیمی ترکیب) برای استفاده داخل کوروتین. */
     fun liveActive(): Boolean {
-        val l = TunnelVpnService.state.value.first
         val o = OcVpnService.state.value.first
         return ikev2Connected || Ikev2Events.status.value.first == Ikev2Events.CONNECTING ||
-            l == TunnelVpnService.STATE_CONNECTED || l == TunnelVpnService.STATE_CONNECTING ||
+            OpenVpnManager.isActive() ||
             o == OcVpnService.STATE_CONNECTED || o == OcVpnService.STATE_CONNECTING
     }
 
@@ -312,7 +306,7 @@ fun ProtocolScreen() {
     // خطای قدیمی یک پروتکل وقتی اتصالی فعال است نشان داده نمی‌شود
     val errorDetail: String? = if (anyActive) null else when {
         ikev2Failed -> "IKEv2: ${ikev2Status.second}"
-        l2tpState.first == TunnelVpnService.STATE_FAILED -> "L2TP: ${l2tpState.second}"
+        ovpnStatus.first == OpenVpnManager.FAILED -> "OpenVPN: ${ovpnStatus.second}"
         ocState.first == OcVpnService.STATE_FAILED -> "OpenConnect: ${ocState.second}"
         else -> null
     }
@@ -320,10 +314,10 @@ fun ProtocolScreen() {
     val statusText = when {
         ikev2Connected -> "متصل · IKEv2"
         ikev2Connecting -> "در حال اتصال… · IKEv2"
-        l2tpConnected -> "متصل · L2TP/IPsec"
+        ovpnConnected -> "متصل · OpenVPN"
         ocConnected -> "متصل · OpenConnect"
-        l2tpState.first == TunnelVpnService.STATE_PAUSED || ocState.first == OcVpnService.STATE_PAUSED -> "متوقف موقت"
-        l2tpBusy -> "در حال اتصال… · " + (if (l2tpState.second.isBlank()) "L2TP/IPsec" else l2tpState.second)
+        ocState.first == OcVpnService.STATE_PAUSED -> "متوقف موقت"
+        ovpnBusy -> "در حال اتصال… · OpenVPN"
         ocBusy -> "در حال اتصال… · OpenConnect"
         else -> "قطع"
     }
@@ -523,7 +517,7 @@ fun ProtocolScreen() {
             title = { Text("نوع سرور", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    VpnType.values().forEach { t ->
+                    VpnType.values().filter { it != VpnType.OPENVPN }.forEach { t ->
                         OutlinedButton(
                             onClick = {
                                 showChooser = false

@@ -11,7 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.io.File
 
-/** ابزار مشترک نوتیفیکیشن سرویس‌های بخش پروتکل‌ها (L2TP و OpenConnect). */
+/** ابزار مشترک نوتیفیکیشن سرویس‌های بخش پروتکل‌ها (OpenConnect و IKEv2). */
 object VpnNotify {
     const val EXTRA_OPEN = "open_mode"
     const val OPEN_PROTO = "PROTO"

@@ -5,18 +5,6 @@ import androidx.preference.PreferenceManager
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** سرور L2TP/IPsec با کلید PSK، نام کاربری و رمز. */
-data class L2tpEntry(
-    val name: String,
-    val server: String,
-    val psk: String,
-    val username: String,
-    val password: String,
-) {
-    val key: String get() = "$server|$username"
-    val label: String get() = if (name.isNotBlank()) name else server
-}
-
 /** سرور OpenConnect (فعلاً پروتکل Cisco AnyConnect). */
 data class OcEntry(
     val name: String,
@@ -31,37 +19,12 @@ data class OcEntry(
     val label: String get() = if (name.isNotBlank()) name else server
 }
 
-/** ذخیرهٔ سرورهای L2TP و OpenConnect و انتخاب‌های هر بخش. */
+/** ذخیرهٔ سرورهای OpenConnect و انتخاب‌های هر بخش. */
 object ProtocolStore {
-    private const val K_L2TP = "L2TP_LIST"
-    private const val K_L2TP_SEL = "L2TP_SELECTED"
     private const val K_OC = "OC_LIST"
     private const val K_OC_SEL = "OC_SELECTED"
 
     private fun prefs(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx)
-
-    fun loadL2tp(ctx: Context): List<L2tpEntry> = runCatching {
-        val arr = JSONArray(prefs(ctx).getString(K_L2TP, "[]") ?: "[]")
-        List(arr.length()) {
-            val o = arr.getJSONObject(it)
-            L2tpEntry(o.optString("n"), o.getString("s"), o.optString("k"), o.getString("u"), o.optString("p"))
-        }
-    }.getOrDefault(emptyList())
-
-    fun saveL2tp(ctx: Context, list: List<L2tpEntry>) {
-        val arr = JSONArray()
-        list.forEach {
-            arr.put(JSONObject().put("n", it.name).put("s", it.server).put("k", it.psk)
-                .put("u", it.username).put("p", it.password))
-        }
-        prefs(ctx).edit().putString(K_L2TP, arr.toString()).apply()
-    }
-
-    fun selectedL2tp(ctx: Context): String? = prefs(ctx).getString(K_L2TP_SEL, null)
-
-    fun setSelectedL2tp(ctx: Context, key: String?) {
-        prefs(ctx).edit().putString(K_L2TP_SEL, key).apply()
-    }
 
     fun loadOc(ctx: Context): List<OcEntry> = runCatching {
         val arr = JSONArray(prefs(ctx).getString(K_OC, "[]") ?: "[]")

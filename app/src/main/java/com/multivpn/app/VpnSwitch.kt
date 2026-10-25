@@ -2,7 +2,6 @@ package com.multivpn.app
 
 import android.content.Context
 import com.multivpn.app.oc.OcVpnService
-import io.github.evokelektrique.tunnelforge.TunnelVpnService
 import ir.uciran.uctor.TorController
 
 /**
@@ -17,9 +16,7 @@ object VpnSwitch {
         if (keep != "SSTP") stopSstpIfActive(ctx)
         if (keep != "PLUS") {
             stopIkev2IfActive(ctx)
-            if (TunnelVpnService.state.value.first != TunnelVpnService.STATE_IDLE) {
-                ctx.startService(TunnelVpnService.disconnectIntent(ctx))
-            }
+            if (OpenVpnManager.isActive()) OpenVpnManager.disconnect(ctx)
             if (OcVpnService.state.value.first != OcVpnService.STATE_IDLE) {
                 ctx.startService(OcVpnService.disconnectIntent(ctx))
             }
