@@ -1,0 +1,536 @@
+name: UC-X
+
+on:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "کدام کار اجرا شود"
+        type: choice
+        default: build
+        options: [build, bridges, both]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ucx-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-zip:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      applied: ${{ steps.apply.outputs.applied }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.WORKFLOW_TOKEN || github.token }}
+
+      - name: Extract uploaded zip and replace project files
+        id: apply
+        shell: bash
+        env:
+          HAS_PAT: ${{ secrets.WORKFLOW_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=( *.zip )
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "No zip uploaded, nothing to apply."
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command -v rsync >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq rsync; }
+          git config user.name "ucx-bot"
+          git config user.email "ucx-bot@users.noreply.github.com"
+          stash="$RUNNER_TEMP/zips"; mkdir -p "$stash"
+          for z in "${zips[@]}"; do mv "$z" "$stash/"; done
+          for z in "$stash"/*.zip; do
+            echo "::group::Applying $(basename "$z")"
+            tmp="$(mktemp -d)"
+            unzip -q -o "$z" -d "$tmp"
+            src="$tmp"
+            mapfile -t top < <(find "$tmp" -mindepth 1 -maxdepth 1 ! -name '__MACOSX')
+            if [ ${#top[@]} -eq 1 ] && [ -d "${top[0]}" ]; then src="${top[0]}"; fi
+            excludes=(--exclude '.git/' --exclude 'signing/' --exclude '*.zip' --exclude '__MACOSX/')
+            if [ "$HAS_PAT" != "true" ]; then
+              excludes+=(--exclude '.github/workflows/')
+              if [ -d "$src/.github/workflows" ] && ! diff -rq "$src/.github/workflows" .github/workflows >/dev/null 2>&1; then
+                echo "::warning::فایل‌های workflow داخل زیپ تغییر کرده‌اند ولی Secret به نام WORKFLOW_TOKEN نیست. آن‌ها اعمال نشدند."
+              fi
+            fi
+            rsync -a --delete "${excludes[@]}" "$src"/ ./
+            echo "::endgroup::"
+          done
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Zip contained no changes."
+          else
+            git commit -q -m "Apply uploaded zip [skip ci]"
+            git push -q origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+
+  keys:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Create once or restore signing keys
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/keys.sh
+
+  native:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Resolve target
+        run: |
+          case "${{ matrix.abi }}" in
+            arm64-v8a)
+              echo "RUST_TARGET=aarch64-linux-android" >> "$GITHUB_ENV"
+              echo "NDK_TRIPLE=aarch64-linux-android" >> "$GITHUB_ENV"
+              echo "GO_ARCH=arm64" >> "$GITHUB_ENV"
+              echo "GO_ARM=" >> "$GITHUB_ENV" ;;
+            armeabi-v7a)
+              echo "RUST_TARGET=armv7-linux-androideabi" >> "$GITHUB_ENV"
+              echo "NDK_TRIPLE=arm-linux-androideabi" >> "$GITHUB_ENV"
+              echo "GO_ARCH=arm" >> "$GITHUB_ENV"
+              echo "GO_ARM=7" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add "$RUST_TARGET"
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "aether -> target"
+          key: android-${{ matrix.abi }}
+
+      - name: Install cargo-ndk
+        run: cargo ndk --version || cargo install cargo-ndk --locked
+
+      - name: Build Tor transport (lyrebird)
+        working-directory: aether
+        run: bash ../pt-build.sh linux "$GO_ARCH" "$PWD/pt" "$GO_ARM"
+
+      - name: Build Psiphon
+        working-directory: aether
+        run: bash ../psiphon-build.sh linux "$GO_ARCH" "$PWD/pt" "$GO_ARM"
+
+      - name: Build Aether core
+        working-directory: aether
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          under=$(echo "$RUST_TARGET" | tr '-' '_')
+          export "BORING_BSSL_RUST_CPPLIB_${under}=static:-bundle=c++"
+          cargo ndk -t ${{ matrix.abi }} --platform 24 build --release --features tor --bin aether
+          bin="target/$RUST_TARGET/release/aether"
+          needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+          echo "aether NEEDED: $needed"
+          if grep -qx 'libc++_shared.so' <<<"$needed"; then
+            echo "libc++_shared.so is dynamic; it will be bundled from the NDK"
+          fi
+
+      - name: Build hev-guard tunnel (JNI for the Guard VPN)
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          rm -rf "$RUNNER_TEMP/hev" && mkdir -p "$RUNNER_TEMP/hev"
+          git clone --recursive --depth 1 https://github.com/heiher/hev-socks5-tunnel "$RUNNER_TEMP/hev/jni"
+          cd "$RUNNER_TEMP/hev"
+          for sig in '"TProxyStartService", "(Ljava/lang/String;I)Z"' '"TProxyStopService", "()Z"' '"TProxyIsRunning", "()Z"' '"TProxyGetStats", "()[J"'; do
+            if ! grep -qF "$sig" jni/src/hev-jni.c; then
+              echo "::warning::hev JNI check: $sig not found (continuing)"
+            fi
+          done
+          "$NDK/ndk-build" \
+            NDK_PROJECT_PATH=. \
+            APP_BUILD_SCRIPT=jni/Android.mk \
+            NDK_APPLICATION_MK=jni/Application.mk \
+            APP_ABI=${{ matrix.abi }} \
+            APP_PLATFORM=android-24 \
+            "APP_CFLAGS=-O3 -DPKGNAME=ir/uciranx/ucg/core -DCLSNAME=TProxyService" \
+            -j"$(nproc)"
+          ls -la libs/${{ matrix.abi }}
+
+      - name: Stage native binaries
+        working-directory: aether
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          out="$RUNNER_TEMP/native-${{ matrix.abi }}"
+          mkdir -p "$out"
+          cp "target/$RUST_TARGET/release/aether" "$out/libaether.so"
+          cpp="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$NDK_TRIPLE/libc++_shared.so"
+          if [ -f "$cpp" ]; then cp "$cpp" "$out/libc++_shared.so"; else echo "::warning::libc++_shared.so not found at $cpp"; fi
+          hev="$RUNNER_TEMP/hev/libs/${{ matrix.abi }}/libhev-socks5-tunnel.so"
+          if [ -f "$hev" ]; then cp "$hev" "$out/libhev-guard.so"; else echo "::error::hev-guard was not built"; exit 1; fi
+          for f in pt/*; do
+            [ -f "$f" ] || continue
+            n=$(basename "$f"); n="${n%.exe}"
+            cp "$f" "$out/lib${n}.so"
+          done
+          ls -la "$out"
+
+      - name: Upload native binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.abi }}
+          path: ${{ runner.temp }}/native-${{ matrix.abi }}/*
+
+  awg:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Resolve Go and clang target
+        run: |
+          case "${{ matrix.abi }}" in
+            arm64-v8a)
+              echo "GO_ARCH=arm64" >> "$GITHUB_ENV"
+              echo "GO_ARM=" >> "$GITHUB_ENV"
+              echo "CC_TRIPLE=aarch64-linux-android24-clang" >> "$GITHUB_ENV" ;;
+            armeabi-v7a)
+              echo "GO_ARCH=arm" >> "$GITHUB_ENV"
+              echo "GO_ARM=7" >> "$GITHUB_ENV"
+              echo "CC_TRIPLE=armv7a-linux-androideabi24-clang" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Build libawg (AmneziaWG)
+        working-directory: awg-native
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          [ -f go.mod ] || go mod init multivpn/awgnative
+          go get github.com/amnezia-vpn/amneziawg-go/v3@latest
+          go mod tidy
+          CGO_ENABLED=1 GOOS=android GOARCH="$GO_ARCH" GOARM="$GO_ARM" CC="$bin/$CC_TRIPLE" \
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o libawg.so .
+          ls -la libawg.so
+
+      - name: Stage libawg
+        working-directory: awg-native
+        run: |
+          out="$RUNNER_TEMP/awg-${{ matrix.abi }}"
+          mkdir -p "$out"
+          cp libawg.so "$out/libawg.so"
+
+      - name: Upload libawg
+        uses: actions/upload-artifact@v4
+        with:
+          name: awg-${{ matrix.abi }}
+          path: ${{ runner.temp }}/awg-${{ matrix.abi }}/*
+
+  openconnect:
+    needs: apply-zip
+    if: ${{ always() && needs.apply-zip.result != 'failure' && needs.apply-zip.result != 'cancelled' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y pkg-config
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Build libopenconnect (OpenSSL + libxml2 + lz4 + openconnect)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          bash native/build-openconnect.sh --abis "${{ matrix.abi }}" \
+            --out "$RUNNER_TEMP/oc-out" --java-out "$RUNNER_TEMP/oc-java" -j 4
+          ls -la "$RUNNER_TEMP/oc-out/${{ matrix.abi }}"
+
+      - name: Upload libopenconnect
+        uses: actions/upload-artifact@v4
+        with:
+          name: oc-${{ matrix.abi }}
+          path: ${{ runner.temp }}/oc-out/${{ matrix.abi }}/libopenconnect.so
+
+  build:
+    needs: [apply-zip, keys, native, awg, openconnect]
+    if: ${{ always() && needs.keys.result == 'success' && needs.native.result == 'success' && needs.awg.result == 'success' && needs.openconnect.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Install swig (SWIG code generation for OpenVPN)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y swig
+          swig -version
+
+      - name: Install Android SDK, NDK 30 and CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;35.0.0" \
+            "ndk;30.0.14904198" "cmake;3.22.1"
+
+      - name: Restore signing keys
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/keys.sh
+
+      - name: Fetch OpenVPN native sources (ics-openvpn with submodules)
+        run: |
+          set -euo pipefail
+          if [ ! -f openvpn/src/main/cpp/CMakeLists.txt ]; then
+            git clone --recursive --depth 1 https://github.com/schwabe/ics-openvpn "$RUNNER_TEMP/ics"
+            rm -rf openvpn/src/main/cpp
+            mkdir -p openvpn/src/main
+            cp -r "$RUNNER_TEMP/ics/main/src/main/cpp" openvpn/src/main/cpp
+          fi
+          test -f openvpn/src/main/cpp/openvpn3/client/ovpncli.i
+          echo "OpenVPN native sources ready: $(find openvpn/src/main/cpp -type f | wc -l) files"
+
+      - name: Download libopenconnect (OpenConnect engine)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: oc-*
+          path: native-oc
+
+      - name: Download libawg (AmneziaWG)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: awg-*
+          path: native
+
+      - name: Download native binaries (Aether, Psiphon, lyrebird)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native
+
+      - name: Place native binaries into jniLibs
+        run: |
+          for d in native/native-*; do
+            abi="${d#native/native-}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "$d"/* "app/src/main/jniLibs/$abi/"
+          done
+          for d in native/awg-*; do
+            abi="${d#native/awg-}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "$d"/* "app/src/main/jniLibs/$abi/"
+          done
+          for d in native-oc/oc-*; do
+            abi="${d#native-oc/oc-}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "$d/libopenconnect.so" "app/src/main/jniLibs/$abi/"
+          done
+          ls -la app/src/main/jniLibs/*/
+
+      - name: Embed license public key
+        run: |
+          if [ -z "${LICENSE_PUBLIC_KEY_B64:-}" ] && [ -f signing/license_pub.der ]; then
+            LICENSE_PUBLIC_KEY_B64="$(base64 -w0 signing/license_pub.der)"
+          fi
+          if [ -z "${LICENSE_PUBLIC_KEY_B64:-}" ]; then
+            echo "::error::کلید عمومی لایسنس پیدا نشد (signing/license_pub.der)"; exit 1
+          fi
+          python3 - "$LICENSE_PUBLIC_KEY_B64" <<'PY'
+          import sys
+          path = "app/src/main/java/com/multivpn/app/security/LicenseManager.kt"
+          key = sys.argv[1]
+          text = open(path, encoding="utf-8").read()
+          if "PASTE_PUBLIC_KEY_HERE" not in text:
+              print("placeholder already replaced"); sys.exit(0)
+          text = text.replace("PASTE_PUBLIC_KEY_HERE", key, 1)
+          open(path, "w", encoding="utf-8").write(text)
+          print("public key embedded:", len(key), "chars")
+          PY
+
+      - name: Embed latest bridges into the APK
+        run: |
+          if git fetch -q --depth 1 origin bridges 2>/dev/null; then
+            git show FETCH_HEAD:bridges.json > "$RUNNER_TEMP/b.json" &&
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$RUNNER_TEMP/b.json" &&
+            cp "$RUNNER_TEMP/b.json" app/src/main/assets/bridges.json && echo "Embedded fresh bridges."
+          else
+            echo "No bridges branch yet, using the bundled list."
+          fi
+
+      - name: Download Xray & Hysteria2 binaries (ARM64)
+        run: |
+          for pair in "arm64-v8a:arm64-v8a:arm64" "armeabi-v7a:arm32-v7a:arm"; do
+            abi="${pair%%:*}"; rest="${pair#*:}"; xabi="${rest%%:*}"; harch="${rest##*:}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            curl -fL --retry 3 -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${xabi}.zip"
+            unzip -o xray.zip -d xray_extracted
+            mv xray_extracted/xray "app/src/main/jniLibs/$abi/libxray.so"
+            chmod +x "app/src/main/jniLibs/$abi/libxray.so"
+            rm -rf xray.zip xray_extracted
+            curl -fL --retry 3 -o "app/src/main/jniLibs/$abi/libhysteria.so" "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-${harch}"
+            chmod +x "app/src/main/jniLibs/$abi/libhysteria.so"
+          done
+
+      - name: Download hev-socks5-tunnel AAR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p app/libs
+          URL=$(gh api repos/heiher/hev-socks5-tunnel/releases/latest --jq '.assets[] | select(.name | endswith(".aar")) | .browser_download_url' | head -n 1 || true)
+          curl -fL --retry 3 "$URL" -o app/libs/hev-socks5-tunnel.aar
+          ls -lh app/libs/
+
+      - name: Build signed release APK
+        run: gradle assembleRelease --stacktrace
+
+      - name: Verify native libraries inside the APK
+        run: |
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          echo "APK: $apk"
+          missing=0
+          for abi in arm64-v8a armeabi-v7a; do
+            for lib in libhev-guard.so libaether.so libpsiphon-tunnel-core.so liblyrebird.so libawg.so libopenconnect.so libovpn3.so libovpnutil.so; do
+              if unzip -l "$apk" | grep -q "lib/$abi/$lib"; then
+                echo "ok   lib/$abi/$lib"
+              else
+                echo "::error::missing lib/$abi/$lib in APK"; missing=1
+              fi
+            done
+          done
+          exit $missing
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UC-X-release
+          path: app/build/outputs/apk/release/*.apk
+
+  worker:
+    needs: [apply-zip, keys]
+    if: ${{ always() && needs.keys.result == 'success' && github.event_name != 'schedule' && inputs.task != 'bridges' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore signing keys
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/keys.sh
+
+      - name: Deploy license bot to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+        run: bash tools/deploy_worker.sh
+
+  bridges:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.task != 'build') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Collect bridges
+        run: python3 tools/collect_bridges.py --out "$RUNNER_TEMP/bridges-out"
+      - name: Publish to "bridges" branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          out="$RUNNER_TEMP/bridges-out"
+          [ -f "$out/bridges.json" ] || exit 0
+          cd "$out"
+          git init -q
+          git checkout -q -b bridges
+          git add -A
+          git -c user.name="ucx-bot" -c user.email="ucx-bot@users.noreply.github.com" commit -q -m "Update bridges $(date -u +%FT%TZ) [skip ci]"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" bridges
