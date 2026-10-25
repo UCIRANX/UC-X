@@ -92,6 +92,9 @@ object OpenVpnManager {
         de.blinkt.openvpn.core.ProfileManager.setTemporaryProfile(ctx, profile)
         AppLogger.log("OpenVPN", "شروع OpenVPN ${s.host} · ${s.country.ifBlank { "-" }}")
         flow.value = CONNECTING to ""
+        // جلوگیری از کرش: صفحهٔ LogWindow کتابخانه در manifest تعریف نشده است.
+        de.blinkt.openvpn.core.Preferences.getDefaultSharedPreferences(ctx)
+            .edit().putBoolean("showlogwindow", false).apply()
         ctx.startActivity(
             Intent(ctx, de.blinkt.openvpn.LaunchVPN::class.java)
                 .putExtra(de.blinkt.openvpn.LaunchVPN.EXTRA_KEY, profile.getUUIDString())
