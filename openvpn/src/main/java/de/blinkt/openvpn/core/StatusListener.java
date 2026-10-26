@@ -83,52 +83,47 @@ public class StatusListener implements VpnStatus.LogListener, VpnStatus.ProfileN
                                        IBinder service) {
             // We've bound to LocalService, cast the IBinder and get LocalService instance
             serviceStatus = IServiceStatus.Stub.asInterface(service);
-            try {
-                /* Check if this a local service ... */
-                if (service.queryLocalInterface("de.blinkt.openvpn.core.IServiceStatus") == null) {
-                    // Not a local service
-                    // خواندن pipe و تماس‌های بایندر باید روی نخ پس‌زمینه باشد، نه main thread
-                    final IServiceStatus remote = serviceStatus;
-                    new Thread(() -> {
-                        try {
-                            VpnStatus.setConnectedVPNProfile(remote.getLastConnectedVPN());
-                            VpnStatus.setTrafficHistory(remote.getTrafficHistory());
-                            ParcelFileDescriptor pfd = remote.registerStatusCallback(mCallback);
-                            DataInputStream fd = new DataInputStream(new ParcelFileDescriptor.AutoCloseInputStream(pfd));
+            /* Check if this a local service ... */
+            if (service.queryLocalInterface("de.blinkt.openvpn.core.IServiceStatus") == null) {
+                // Not a local service
+                // خواندن pipe و تماس‌های بایندر باید روی نخ پس‌زمینه باشد، نه main thread
+                final IServiceStatus remote = serviceStatus;
+                new Thread(() -> {
+                    try {
+                        VpnStatus.setConnectedVPNProfile(remote.getLastConnectedVPN());
+                        VpnStatus.setTrafficHistory(remote.getTrafficHistory());
+                        ParcelFileDescriptor pfd = remote.registerStatusCallback(mCallback);
+                        DataInputStream fd = new DataInputStream(new ParcelFileDescriptor.AutoCloseInputStream(pfd));
 
-                            /* notify the backend :openvpn process of changes in profiles */
-                            VpnStatus.addProfileStateListener(StatusListener.this);
+                        /* notify the backend :openvpn process of changes in profiles */
+                        VpnStatus.addProfileStateListener(StatusListener.this);
 
-                            short len = fd.readShort();
-                            byte[] buf = new byte[65336];
-                            while (len != 0x7fff) {
-                                fd.readFully(buf, 0, len);
-                                LogItem logitem = new LogItem(buf, len);
-                                VpnStatus.newLogItem(logitem, false);
-                                len = fd.readShort();
-                            }
-                            fd.close();
-                            pfd.close();
-                        } catch (RemoteException | IOException e) {
-                            e.printStackTrace();
-                            VpnStatus.logException(e);
+                        short len = fd.readShort();
+                        byte[] buf = new byte[65336];
+                        while (len != 0x7fff) {
+                            fd.readFully(buf, 0, len);
+                            LogItem logitem = new LogItem(buf, len);
+                            VpnStatus.newLogItem(logitem, false);
+                            len = fd.readShort();
                         }
-                    }, "StatusPipeReader").start();
-
-
-                } else {
-                    VpnStatus.initLogCache(mCacheDir);
-                    /* Set up logging to Logcat with a context) */
-
-                    if (BuildConfig.DEBUG || BuildConfig.FLAVOR.equals("skeleton")) {
-                        VpnStatus.addLogListener(StatusListener.this);
+                        fd.close();
+                        pfd.close();
+                    } catch (RemoteException | IOException e) {
+                        e.printStackTrace();
+                        VpnStatus.logException(e);
                     }
-                }
+                }, "StatusPipeReader").start();
 
-            } catch (RemoteException | IOException e) {
-                e.printStackTrace();
-                VpnStatus.logException(e);
+
+            } else {
+                VpnStatus.initLogCache(mCacheDir);
+                /* Set up logging to Logcat with a context) */
+
+                if (BuildConfig.DEBUG || BuildConfig.FLAVOR.equals("skeleton")) {
+                    VpnStatus.addLogListener(StatusListener.this);
+                }
             }
+
         }
 
         @Override
