@@ -127,6 +127,17 @@ private fun initialFor(s: ProtoServer?, t: VpnType): Map<String, String> {
 
 private fun ProtoServer.toIkev2() = Ikev2Server(name, host, user, password, remoteId, psk)
 
+/** نام یک‌خطی سرور: «پروتکل کشور» مثل «OpenVpn TCP هنگ‌کنگ» یا «IKEv2 اسپانیا». */
+private fun plusTitle(s: ProtoServer): String {
+    val country = sstpCountryName(s.country)
+    val proto = when (s.type) {
+        VpnType.IKEV2 -> "IKEv2"
+        VpnType.OPENCONNECT -> "OpenConnect"
+        VpnType.OPENVPN -> "OpenVpn ${s.host.uppercase()}"
+    }
+    return listOf(proto, country).filter { it.isNotBlank() }.joinToString(" ")
+}
+
 /** شروع OpenConnect؛ VPNهای دیگر قبلاً قطع می‌شوند. */
 private fun startServer(context: Context, s: ProtoServer) {
     VpnSwitch.stopOthers(context, "PLUS")
@@ -195,6 +206,7 @@ fun ProtocolScreen() {
 
     // بار اول که هنوز ساب‌لینکی گرفته نشده، بروزرسانی خودکار
     LaunchedEffect(Unit) {
+        Ikev2Events.restore(context)
         if (ProtoLists.lastUpdated(context) == 0L || subList.any { it.source.isBlank() }) {
             note = ProtoLists.refreshSub(context)
             subList = ProtoLists.loadSub(context)
@@ -274,7 +286,7 @@ fun ProtocolScreen() {
     }
 
     fun disconnectAll() {
-        if (ikev2Connected || ikev2Connecting) stopIkev2(context)
+        if (ikev2Connected || ikev2Connecting || Ikev2Store.isActive(context)) stopIkev2(context)
         if (OpenVpnManager.isActive()) OpenVpnManager.disconnect(context)
         if (OcVpnService.state.value.first != OcVpnService.STATE_IDLE) {
             context.startService(OcVpnService.disconnectIntent(context))
@@ -323,7 +335,7 @@ fun ProtocolScreen() {
         ocState.first == OcVpnService.STATE_PAUSED -> "متوقف موقت"
         ovpnBusy -> "در حال اتصال… · OpenVPN"
         ocBusy -> "در حال اتصال… · OpenConnect"
-        else -> "قطع"
+        else -> ""
     }
     val accent = when {
         connectedAny -> Green
@@ -335,27 +347,31 @@ fun ProtocolScreen() {
         Box(
             modifier = Modifier
                 .fillMaxWidth(if (landscape) 0.9f else 0.8f)
-                .height(if (landscape) 52.dp else 58.dp)
-                .background(Brush.radialGradient(listOf(accent.copy(alpha = 0.95f), accent.copy(alpha = 0.3f))), RoundedCornerShape(16.dp))
+                .height(if (landscape) 60.dp else 66.dp)
+                .background(accent, RoundedCornerShape(16.dp))
                 .clickable { if (anyActive) disconnectAll() else connectSelected() },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                if (anyActive) "قطع" else "اتصال",
-                color = Color.White,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    if (anyActive) "قطع" else "اتصال",
+                    color = Color.White,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (statusText.isNotBlank()) {
+                    Text(
+                        statusText,
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
-        Text(
-            statusText,
-            color = if (connectedAny) Green else PTextMain,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
         if (note.isNotBlank()) Text(note, color = PTextSub, fontSize = 11.sp, textAlign = TextAlign.Center)
         if (errorDetail != null) {
             Text("متصل نشد؛ لاگ برنامه را ببینید", color = PDanger, fontSize = 12.sp, textAlign = TextAlign.Center)
@@ -627,17 +643,10 @@ private fun ServerList(
                 Spacer8()
                 Column(Modifier.weight(1f)) {
                     Text(
-                        s.label,
+                        plusTitle(s),
                         color = PTextMain,
                         fontSize = 12.sp,
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "${sstpCountryName(s.country).let { if (it.isBlank()) "" else "$it · " }}${s.type.label} · ${s.host}${if (s.type == VpnType.OPENCONNECT) ":${s.port}" else ""}",
-                        color = c,
-                        fontSize = 10.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

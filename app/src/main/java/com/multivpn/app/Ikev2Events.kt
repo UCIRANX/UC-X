@@ -69,6 +69,36 @@ object Ikev2Events {
         }
     }
 
+    /** فقط context را تنظیم می‌کند (بدون ثبت گیرنده)؛ برای قطع از نوتیفیکیشن ضروری است. */
+    fun attach(ctx: Context) {
+        appCtx = ctx.applicationContext
+    }
+
+    /** نوتیفیکیشن IKEv2 را مستقیم پاک می‌کند، حتی اگر وضعیت داخلی خالی باشد. */
+    fun forceCancelNotice(ctx: Context) {
+        runCatching { ctx.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID) }
+    }
+
+    /**
+     * هنگام باز شدن بخش پلاس: اگر پروفایل IKEv2 فعال ثبت شده ولی شبکهٔ VPN بالا است،
+     * وضعیت «متصل» بازسازی می‌شود؛ اگر VPN دیگر نیست، وضعیت ذخیره‌شده پاک می‌شود.
+     */
+    fun restore(ctx: Context) {
+        attach(ctx)
+        if (!Ikev2Store.isActive(ctx)) return
+        if (VpnNotify.vpnIfaceName(ctx) != null) {
+            if (flow.value.first != CONNECTED) {
+                flow.value = CONNECTED to ""
+                AppLogger.log("IKEv2", "وضعیت IKEv2 از سیستم بازسازی شد (متصل)")
+            }
+        } else {
+            AppLogger.log("IKEv2", "VPN IKEv2 در سیستم نیست؛ وضعیت ذخیره‌شده پاک شد")
+            Ikev2Store.setActive(ctx, false)
+            forceCancelNotice(ctx)
+            flow.value = IDLE to ""
+        }
+    }
+
     /** ثبت گیرندهٔ رویدادهای سیستم؛ چندبار صدا زدن بی‌اثر است. */
     fun register(ctx: Context) {
         appCtx = ctx.applicationContext
@@ -214,11 +244,11 @@ object Ikev2Events {
         stopSpeed()
         if (appCtx == null) return
         val uid = Process.myUid()
-        var prev = VpnNotify.counters(uid)
+        var prev = VpnNotify.vpnCounters(appCtx ?: return, uid)
         val r = object : Runnable {
             override fun run() {
                 if (flow.value.first != CONNECTED) return
-                val cur = VpnNotify.counters(uid)
+                val cur = VpnNotify.vpnCounters(appCtx ?: return, uid)
                 val down = (cur.first - prev.first).coerceAtLeast(0L)
                 val up = (cur.second - prev.second).coerceAtLeast(0L)
                 prev = cur

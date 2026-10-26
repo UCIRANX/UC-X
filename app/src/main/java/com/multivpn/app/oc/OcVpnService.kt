@@ -265,7 +265,7 @@ class OcVpnService : VpnService() {
         stopSpeed()
         val t = Thread({
             val uid = applicationInfo.uid
-            var prev = VpnNotify.counters(uid)
+            var prev = VpnNotify.vpnCounters(this, uid)
             var prevT = SystemClock.elapsedRealtime()
             while (!Thread.currentThread().isInterrupted) {
                 try {
@@ -273,7 +273,7 @@ class OcVpnService : VpnService() {
                 } catch (_: InterruptedException) {
                     break
                 }
-                val cur = VpnNotify.counters(uid)
+                val cur = VpnNotify.vpnCounters(this, uid)
                 val now = SystemClock.elapsedRealtime()
                 val sec = ((now - prevT).coerceAtLeast(1L)) / 1000.0
                 val down = ((cur.first - prev.first).coerceAtLeast(0L) / sec).toLong()

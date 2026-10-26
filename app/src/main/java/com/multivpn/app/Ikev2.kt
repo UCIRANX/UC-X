@@ -218,7 +218,9 @@ fun startIkev2(ctx: Context, s: Ikev2Server?): String? {
 /** قطع: توقف پروفایل ثبت‌شده بدون پاک کردن کامل اطلاعات در صورت عدم نیاز (جلوگیری از پرش شبکه) */
 fun stopIkev2(ctx: Context) {
     AppLogger.log("IKEv2", "قطع اتصال IKEv2")
+    Ikev2Events.attach(ctx)
     Ikev2Events.onStopped()
+    Ikev2Events.forceCancelNotice(ctx)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         runCatching { vpnManager(ctx).stopProvisionedVpnProfile() }
     }

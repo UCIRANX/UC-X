@@ -463,14 +463,12 @@ public class OpenVPNService extends VpnService implements StateListener, Callbac
         // Let the configure Button show the Log
 
 
+        // کلیک روی نوتیفیکیشن OpenVPN: برنامهٔ اصلی را در بخش پلاس باز می‌کند
         Intent intent = new Intent();
-        intent.setComponent(new ComponentName(this, getPackageName() + ".activities.MainActivity"));
-
-        intent.putExtra("PAGE", "graph");
-        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-        PendingIntent startLW = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
-        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-        return startLW;
+        intent.setComponent(new ComponentName(getPackageName(), getPackageName() + ".MainActivity"));
+        intent.putExtra("open_mode", "PROTO");
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
     }
 

@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.TrafficStats
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -32,6 +34,29 @@ object VpnNotify {
      */
     fun counters(uid: Int): Pair<Long, Long> =
         tunCounters() ?: (TrafficStats.getUidRxBytes(uid).coerceAtLeast(0L) to TrafficStats.getUidTxBytes(uid).coerceAtLeast(0L))
+
+    /** نام رابط شبکهٔ VPN فعال (tun0 و…) از ConnectivityManager؛ null اگر VPN فعال نیست. */
+    fun vpnIfaceName(ctx: Context): String? = runCatching {
+        val cm = ctx.getSystemService(ConnectivityManager::class.java)
+        cm.allNetworks.firstNotNullOfOrNull { n ->
+            val caps = cm.getNetworkCapabilities(n)
+            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) cm.getLinkProperties(n)?.interfaceName else null
+        }
+    }.getOrNull()
+
+    /** شمارندهٔ همان رابط؛ فقط یک‌بار شمرده می‌شود. */
+    fun ifaceCounters(name: String): Pair<Long, Long>? = runCatching {
+        File("/proc/net/dev").readLines().firstNotNullOfOrNull { line ->
+            val t = line.trim()
+            if (!t.startsWith("$name:")) return@firstNotNullOfOrNull null
+            val nums = t.substringAfter(":").trim().split(Regex("\\s+"))
+            if (nums.size < 9) null else nums[0].toLong() to nums[8].toLong()
+        }
+    }.getOrNull()
+
+    /** سرعت Plus (IKEv2 و OpenConnect): اول رابط VPN فعال، بعد روش قبلی. */
+    fun vpnCounters(ctx: Context, uid: Int): Pair<Long, Long> =
+        vpnIfaceName(ctx)?.let { ifaceCounters(it) } ?: counters(uid)
 
     fun speedText(bps: Long): String = when {
         bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
