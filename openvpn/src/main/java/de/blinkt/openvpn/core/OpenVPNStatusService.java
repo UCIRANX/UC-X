@@ -35,9 +35,9 @@ public class OpenVPNStatusService extends Service implements VpnStatus.LogListen
     static final RemoteCallbackList<IStatusCallbacks> mCallbacks =
             new RemoteCallbackList<>();
 
-    @Override
     private static boolean sLogCacheInit = false;
 
+    @Override
     public void onCreate() {
         super.onCreate();
         // در پروسه‌ی :openvpn باید کش لاگ راه‌اندازی شود تا VpnStatus.readFileLog true شود
