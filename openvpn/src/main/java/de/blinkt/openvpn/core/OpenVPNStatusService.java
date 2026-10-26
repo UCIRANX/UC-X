@@ -36,8 +36,16 @@ public class OpenVPNStatusService extends Service implements VpnStatus.LogListen
             new RemoteCallbackList<>();
 
     @Override
+    private static boolean sLogCacheInit = false;
+
     public void onCreate() {
         super.onCreate();
+        // در پروسه‌ی :openvpn باید کش لاگ راه‌اندازی شود تا VpnStatus.readFileLog true شود
+        // و نخ pushLogs علامت پایان (0x7fff) را بنویسد. بدون این، کلاینت در main thread گیر می‌کند.
+        if (!sLogCacheInit) {
+            sLogCacheInit = true;
+            VpnStatus.initLogCache(getCacheDir());
+        }
         VpnStatus.addLogListener(this);
         VpnStatus.addByteCountListener(this);
         VpnStatus.addStateListener(this);
