@@ -159,13 +159,14 @@ object ProtoLists {
 
     // ───── ساب‌لینک ─────
 
-    fun loadSub(ctx: Context): List<ProtoServer> = readServers(prefs(ctx).getString(K_SUB, "[]"))
+    fun loadSub(ctx: Context): List<ProtoServer> = orderOvpn(readServers(prefs(ctx).getString(K_SUB, "[]")))
 
     /** ترتیب OpenVPN: ۳ تا TCP، سپس ۱ تا UDP، تکرار؛ وقتی UDP تمام شد، بقیهٔ TCP در انتها. */
     fun orderOvpn(list: List<ProtoServer>): List<ProtoServer> {
         val others = list.filter { it.type != VpnType.OPENVPN }
-        val tcp = list.filter { it.type == VpnType.OPENVPN && it.host == "TCP" }
-        val udp = list.filter { it.type == VpnType.OPENVPN && it.host == "UDP" }
+        // سرورهای روی پورت 443 به انتها می‌روند (در عمل این پورت برای OpenVPN جواب نداد)
+        val tcp = list.filter { it.type == VpnType.OPENVPN && it.host == "TCP" }.sortedBy { ovpnPriority(it) }
+        val udp = list.filter { it.type == VpnType.OPENVPN && it.host == "UDP" }.sortedBy { ovpnPriority(it) }
         val merged = mutableListOf<ProtoServer>()
         var ti = 0
         var ui = 0
@@ -176,6 +177,15 @@ object ProtoLists {
         return others + merged
     }
 
+
+    /** ۰ برای پورت‌های عادی، ۱ برای پورت ۴۴۳ (از روی خط remote داخل کانفیگ base64). */
+    private fun ovpnPriority(s: ProtoServer): Int {
+        val port = runCatching {
+            val text = String(android.util.Base64.decode(s.config, android.util.Base64.DEFAULT), Charsets.UTF_8)
+            Regex("(?m)^\\s*remote\\s+\\S+\\s+(\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull()
+        }.getOrNull()
+        return if (port == 443) 1 else 0
+    }
 
     fun saveSub(ctx: Context, list: List<ProtoServer>) {
         prefs(ctx).edit().putString(K_SUB, writeServers(list)).apply()

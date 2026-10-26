@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import com.multivpn.app.log.AppLogger
 import de.blinkt.openvpn.core.ConnectionStatus
@@ -68,10 +70,30 @@ object OpenVpnManager {
         if (initialized) return
         de.blinkt.openvpn.core.OvpnBootstrap.init(ctx)
         de.blinkt.openvpn.core.VpnStatus.addStateListener(listener)
+        val appCtx = ctx.applicationContext
+        // خروجی هسته OpenVPN را هم در لاگ داخل برنامه می‌نویسیم تا علت قطع دیده شود
+        de.blinkt.openvpn.core.VpnStatus.addLogListener { item ->
+            runCatching { AppLogger.log("OpenVPN-core", item.getString(appCtx)) }
+        }
         initialized = true
     }
 
     fun isActive(): Boolean = flow.value.first != IDLE
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var attemptId = 0
+
+    /** اگر ۳۰ ثانیه بعد از شروع هنوز در حال اتصال باشیم، اتصال را قطع و علت را نشان می‌دهیم. */
+    private fun armWatchdog(app: Context, port: String) {
+        val id = ++attemptId
+        mainHandler.postDelayed({
+            if (id == attemptId && flow.value.first == CONNECTING) {
+                AppLogger.log("OpenVPN", "بدون پاسخ پس از ۳۰ ثانیه (پورت $port)")
+                flow.value = FAILED to "سرور پاسخ نداد (پورت $port)"
+                disconnect(app)
+            }
+        }, 30_000L)
+    }
 
     /** null یعنی شروع شد؛ وگرنه متن خطا. */
     fun connect(ctx: Context, s: ProtoServer): String? {
@@ -95,6 +117,10 @@ object OpenVpnManager {
             return "کانفیگ قابل خواندن نیست: ${e.message}"
         }
         profile.mName = s.label
+        val remote = Regex("(?m)^\\s*remote\\s+(\\S+)\\s+(\\d+)").find(text)
+        val remoteHost = remote?.groupValues?.get(1) ?: "?"
+        val remotePort = remote?.groupValues?.get(2) ?: "?"
+        AppLogger.log("OpenVPN", "سرور $remoteHost:$remotePort")
         de.blinkt.openvpn.core.ProfileManager.setTemporaryProfile(ctx, profile)
         AppLogger.log("OpenVPN", "شروع OpenVPN ${s.host} · ${s.country.ifBlank { "-" }}")
         flow.value = CONNECTING to ""
@@ -107,6 +133,7 @@ object OpenVpnManager {
                 .setAction(Intent.ACTION_MAIN)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+        armWatchdog(ctx.applicationContext, remotePort)
         return null
     }
 
