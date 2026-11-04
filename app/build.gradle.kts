@@ -21,15 +21,9 @@ android {
         versionCode = runNumber + 900
         versionName = "3.0.$runNumber"
         buildConfigField("String", "BRIDGE_REPO", "\"UCIRANX/UC-Tor\"")
-    }
 
-    // APK جدا برای هر معماری + یک APK کلی (universal) مثل قبل
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = true
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
